@@ -2,33 +2,32 @@
   --bg: #000000;
   --surface: #0a0a0a;
   --card: #121212;
-  --border: #27272a;
+  --border: #222226;
   --border-hover: #3f3f46;
   --text-main: #ffffff;
-  --text-muted: #a1a1aa;
+  --text-muted: #8e8e93;
   --radius: 12px;
   --emerald: #10b981;
-  --amber: #f59e0b;
   --rose: #f43f5e;
+  --amber: #f59e0b;
 }
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
 
 body {
   background-color: var(--bg);
   color: var(--text-main);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  line-height: 1.5;
+  min-height: 100vh;
 }
 
-#root {
-  min-height: 100dvh;
-  display: flex;
-  flex-direction: column;
-}
-
+/* Base Wrapper */
 .page-wrapper {
   display: flex;
   flex-direction: column;
@@ -37,27 +36,69 @@ body {
   padding: 1.25rem 1rem;
 }
 
-.auth-container {
+/* Master Desktop Shell */
+.desktop-shell {
   width: 100%;
-  max-width: 400px;
-  margin: auto;
+  max-width: 1440px;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 2rem;
+  gap: 1.5rem;
 }
 
-h1 {
-  font-size: 1.5rem;
-  font-weight: 600;
-  letter-spacing: -0.04em;
-  color: var(--text-main);
+@media (min-width: 1024px) {
+  .desktop-shell {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    align-items: start;
+    padding: 1rem 2rem;
+  }
 }
 
-p {
-  font-size: 0.95rem;
-  color: var(--text-muted);
+/* Sidebar for PC */
+.desktop-sidebar {
+  display: none;
 }
 
+@media (min-width: 1024px) {
+  .desktop-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    position: sticky;
+    top: 1.5rem;
+    height: calc(100vh - 3rem);
+    border-right: 1px solid var(--border);
+    padding-right: 1.5rem;
+  }
+}
+
+/* 2-Column Content Layout on PC */
+.main-content-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+@media (min-width: 1024px) {
+  .main-content-grid {
+    display: grid;
+    grid-template-columns: 1.6fr 1fr;
+    gap: 1.5rem;
+    align-items: start;
+  }
+}
+
+/* Mobile-only / Desktop-only toggles */
+@media (min-width: 1024px) {
+  .mobile-only { display: none !important; }
+}
+
+@media (max-width: 1023px) {
+  .desktop-only { display: none !important; }
+}
+
+/* Clean Cards & Elements */
 .clean-card {
   background-color: var(--card);
   border: 1px solid var(--border);
@@ -65,33 +106,37 @@ p {
   padding: 1.25rem;
 }
 
-.btn-google {
-  width: 100%;
-  height: 48px;
-  background-color: #ffffff;
-  color: #000000;
-  border: none;
-  border-radius: 8px;
-  font-size: 0.95rem;
-  font-weight: 500;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 0.75rem;
-  cursor: pointer;
+  margin-bottom: 1.25rem;
 }
 
-.btn-google:active { transform: scale(0.98); }
+.form-input {
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-main);
+  border-radius: 8px;
+  padding: 0.65rem 0.85rem;
+  font-size: 0.9rem;
+  outline: none;
+}
+
+.form-input:focus {
+  border-color: var(--border-hover);
+}
 
 .btn-action {
   width: 100%;
-  height: 48px;
+  height: 44px;
   background-color: var(--text-main);
   color: var(--bg);
   border: none;
   border-radius: 8px;
-  font-size: 0.95rem;
-  font-weight: 500;
+  font-size: 0.92rem;
+  font-weight: 600;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -99,111 +144,33 @@ p {
   cursor: pointer;
 }
 
-.btn-action:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.role-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.75rem;
-  margin: 1.5rem 0;
-}
-
-.role-box {
-  background-color: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 1.25rem 1rem;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.5rem;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  color: var(--text-muted);
-}
-
-.role-box:hover { border-color: var(--border-hover); }
-
-.role-box.active {
-  background-color: var(--card);
-  border-color: var(--text-main);
-  color: var(--text-main);
-}
-
-.role-box span { font-weight: 500; font-size: 0.9rem; }
-
-.feature-list {
-  margin-top: 2.5rem;
-  border-top: 1px solid var(--border);
-  padding-top: 1.75rem;
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-}
-
-.feature-item {
-  display: flex;
-  gap: 0.85rem;
-  align-items: flex-start;
-}
-
-.feature-icon {
-  color: var(--text-main);
-  margin-top: 0.1rem;
-}
-
-.feature-text h3 {
-  font-size: 0.92rem;
-  font-weight: 500;
-  color: var(--text-main);
-}
-
-.feature-text p {
-  font-size: 0.82rem;
-  margin-top: 0.15rem;
-  color: var(--text-muted);
-}
-
-/* Tabs & UI Badges */
 .nav-tab-bar {
   display: flex;
   gap: 0.5rem;
   overflow-x: auto;
   padding-bottom: 0.5rem;
   margin-bottom: 1.25rem;
-  -webkit-overflow-scrolling: touch;
 }
 
 .nav-tab-btn {
   background: transparent;
   color: var(--text-muted);
   border: 1px solid var(--border);
-  padding: 0.45rem 0.85rem;
+  padding: 0.5rem 0.85rem;
   border-radius: 8px;
   font-size: 0.85rem;
   font-weight: 500;
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  white-space: nowrap;
   cursor: pointer;
-  transition: all 0.15s ease;
+  white-space: nowrap;
 }
 
 .nav-tab-btn.active {
   background-color: var(--text-main);
   color: var(--bg);
   border-color: var(--text-main);
-}
-
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-  gap: 0.75rem;
-  margin-bottom: 1.25rem;
 }
 
 .badge-alert {
@@ -224,19 +191,4 @@ p {
   border-radius: 6px;
   font-size: 0.75rem;
   font-weight: 600;
-}
-
-.form-input {
-  width: 100%;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  color: var(--text-main);
-  border-radius: 8px;
-  padding: 0.65rem 0.85rem;
-  font-size: 0.9rem;
-  outline: none;
-}
-
-.form-input:focus {
-  border-color: var(--border-hover);
 }
