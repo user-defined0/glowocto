@@ -1,22 +1,25 @@
-import React, { useState, useRef, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { supabase } from "../supabase";
 import { 
-  ScanLine, 
-  Camera, 
-  ShieldCheck, 
-  AlertTriangle, 
-  ShieldAlert, 
-  Thermometer, 
-  Star, 
-  MessageSquare, 
+  ShoppingBag, 
+  PlusCircle, 
+  Sparkles, 
+  LifeBuoy, 
+  LogOut, 
+  Search, 
+  Trash2, 
   Phone, 
   Mail, 
-  Bell, 
-  LogOut, 
+  X, 
+  Send, 
   Loader2, 
-  HeartPulse,
-  Send,
-  Sparkles
+  ChevronRight, 
+  ShieldCheck, 
+  Flame, 
+  ThermometerSnowflake, 
+  ChefHat, 
+  MessageCircle, 
+  Sparkle 
 } from "lucide-react";
 
 interface ConsumerDashboardProps {
@@ -24,275 +27,307 @@ interface ConsumerDashboardProps {
   onSignOut: () => void;
 }
 
-interface ProductHealthData {
-  barcode: string;
-  name: string;
-  brand?: string;
-  ingredientsText?: string;
-  nutriScore?: string;
-  novaGroup?: number;
-  flags: { type: "danger" | "warn" | "safe"; label: string; detail: string }[];
-  healthVerdict: "HEALTHY" | "MODERATE" | "UNHEALTHY";
-  storageTip: string;
-  shelfLifeAdvice: string;
-}
-
-interface ProductReview {
+interface PantryItem {
   id: string;
-  user_email: string;
-  barcode: string;
-  product_name: string;
-  rating: number;
-  review_text: string;
+  name: string;
+  category: string;
+  quantity: string;
+  notes?: string;
   created_at: string;
 }
 
+// 2026 Active Production API Models
+const MODEL_CASCADE = [
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash"
+];
+
 export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashboardProps) {
-  const [activeTab, setActiveTab] = useState<"scanner" | "reviews" | "support">("scanner");
-  
-  // Scanner state
-  const [barcodeInput, setBarcodeInput] = useState("");
-  const [isScanning, setIsScanning] = useState(false);
-  const [cameraActive, setCameraActive] = useState(false);
-  const [scannedProduct, setScannedProduct] = useState<ProductHealthData | null>(null);
-  const [scanError, setScanError] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [activeTab, setActiveTab] = useState<"pantry" | "add" | "support">("pantry");
+  const [items, setItems] = useState<PantryItem[]>([]);
+  const [loadingItems, setLoadingItems] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
 
-  // Reviews state
-  const [reviews, setReviews] = useState<ProductReview[]>([]);
-  const [newRating, setNewRating] = useState(5);
-  const [newReviewText, setNewReviewText] = useState("");
-  const [isSubmittingReview, setIsSubmittingReview] = useState(false);
+  // Add Item State
+  const [itemName, setItemName] = useState("");
+  const [itemCategory, setItemCategory] = useState("Daily Staples");
+  const [itemQuantity, setItemQuantity] = useState("1 pack");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Preferences & permissions toggles
-  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  // AI Modal & Engine State
+  const [selectedItemForAi, setSelectedItemForAi] = useState<PantryItem | null>(null);
+  const [customQuery, setCustomQuery] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiResponse, setAiResponse] = useState<string | null>(null);
+
+  const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
 
   useEffect(() => {
-    if (scannedProduct?.barcode) {
-      fetchProductReviews(scannedProduct.barcode);
+    if (session?.user?.id) {
+      fetchPantryItems(session.user.id);
     }
-  }, [scannedProduct]);
+  }, [session]);
 
-  const fetchProductReviews = async (barcode: string) => {
-    const { data } = await supabase
-      .from("product_reviews")
+  const fetchPantryItems = async (userId: string) => {
+    setLoadingItems(true);
+    const { data, error } = await supabase
+      .from("consumer_pantry")
       .select("*")
-      .eq("barcode", barcode)
+      .eq("user_id", userId)
       .order("created_at", { ascending: false });
-    if (data) setReviews(data as ProductReview[]);
+
+    if (!error && data) {
+      setItems(data as PantryItem[]);
+    }
+    setLoadingItems(false);
   };
 
-  const analyzeProductHealth = (data: any, barcode: string): ProductHealthData => {
-    const p = data.product || {};
-    const name = p.product_name || p.generic_name || "Packaged Food Item";
-    const brand = p.brands || "";
-    const ingredients = p.ingredients_text || "";
-    const lowerIng = ingredients.toLowerCase();
+  const handleAddItem = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!itemName.trim()) return;
 
-    const flags: ProductHealthData["flags"] = [];
-
-    // Detect harmful ingredients
-    if (lowerIng.includes("palm oil") || lowerIng.includes("palmolein")) {
-      flags.push({ type: "danger", label: "Palm Oil / Palmolein Present", detail: "High in saturated fat content, elevates bad LDL cholesterol." });
-    }
-    if (lowerIng.includes("high fructose corn syrup") || lowerIng.includes("liquid glucose") || lowerIng.includes("invert syrup")) {
-      flags.push({ type: "danger", label: "Refined Added Sugars", detail: "Causes immediate insulin spikes and metabolic stress." });
-    }
-    if (lowerIng.includes("monosodium glutamate") || lowerIng.includes("msg") || lowerIng.includes("e621")) {
-      flags.push({ type: "warn", label: "MSG / E621 Flavor Enhancer", detail: "Can cause hypersensitive reactions in susceptible individuals." });
-    }
-    if (lowerIng.includes("preservative") || lowerIng.includes("sodium benzoate") || lowerIng.includes("potassium sorbate")) {
-      flags.push({ type: "warn", label: "Chemical Preservatives", detail: "Synthetic shelf-life stabilizers present." });
-    }
-    if (lowerIng.includes("artificial flavour") || lowerIng.includes("synthetic color") || lowerIng.includes("tartrazine") || lowerIng.includes("sunset yellow")) {
-      flags.push({ type: "warn", label: "Artificial Colors & Flavors", detail: "Contains synthetic chemical coloring agents." });
-    }
-
-    if (flags.length === 0) {
-      flags.push({ type: "safe", label: "Wholesome Ingredients", detail: "No aggressive preservatives, hydrogenated oils, or excessive additives found." });
-    }
-
-    let verdict: ProductHealthData["healthVerdict"] = "HEALTHY";
-    if (flags.some(f => f.type === "danger")) {
-      verdict = "UNHEALTHY";
-    } else if (flags.some(f => f.type === "warn")) {
-      verdict = "MODERATE";
-    }
-
-    const categories = (p.categories || "").toLowerCase();
-    let storage = "Store in a cool, dry place away from direct heat and sunlight.";
-    let shelfLife = "Refer to the printed Best Before / Use By date on the container.";
-
-    if (categories.includes("milk") || categories.includes("dairy") || categories.includes("cheese") || categories.includes("paneer")) {
-      storage = "Refrigerate continuously between 2°C and 4°C. Consume within 48-72 hours of unsealing.";
-      shelfLife = "High risk of bacterial spoilage if left at room temperature.";
-    } else if (categories.includes("biscuit") || categories.includes("cookie") || categories.includes("chips") || categories.includes("namkeen")) {
-      storage = "Store in an airtight container once opened to avoid moisture entry and oxidation.";
-      shelfLife = "Best consumed within 3 months from packing.";
-    } else if (categories.includes("sauce") || categories.includes("ketchup") || categories.includes("jam")) {
-      storage = "Refrigerate after opening to prevent fungal formation.";
-      shelfLife = "Good for up to 30 days once the seal is broken.";
-    }
-
-    return {
-      barcode,
-      name,
-      brand,
-      ingredientsText: ingredients,
-      nutriScore: p.nutriscore_grade?.toUpperCase(),
-      novaGroup: p.nova_group,
-      flags,
-      healthVerdict: verdict,
-      storageTip: p.conservation_conditions || storage,
-      shelfLifeAdvice: shelfLife,
+    setIsSubmitting(true);
+    const payload = {
+      user_id: session.user.id,
+      name: itemName.trim(),
+      category: itemCategory,
+      quantity: itemQuantity.trim() || "1 unit",
     };
+
+    const { data, error } = await supabase
+      .from("consumer_pantry")
+      .insert([payload])
+      .select();
+
+    if (!error && data) {
+      setItems(prev => [data[0] as PantryItem, ...prev]);
+      setItemName("");
+      setItemQuantity("1 pack");
+      setActiveTab("pantry");
+    } else {
+      alert("Failed to save item. Make sure the database migration was run.");
+    }
+    setIsSubmitting(false);
   };
 
-  const lookupBarcode = async (code: string) => {
-    const cleanCode = code.trim();
-    if (!cleanCode) return;
-
-    setIsScanning(true);
-    setScanError(null);
-    setScannedProduct(null);
-
-    try {
-      const response = await fetch(`https://in.openfoodfacts.org/api/v0/product/${cleanCode}.json`);
-      const data = await response.json();
-
-      if (data && data.status === 1 && data.product) {
-        const parsed = analyzeProductHealth(data, cleanCode);
-        setScannedProduct(parsed);
-      } else {
-        setScanError(`Barcode ${cleanCode} not found in the verified grocery safety directory.`);
-      }
-    } catch {
-      setScanError("Network error querying health database. Please check your connection.");
-    } finally {
-      setIsScanning(false);
-      stopCamera();
+  const handleDeleteItem = async (id: string) => {
+    const { error } = await supabase.from("consumer_pantry").delete().eq("id", id);
+    if (!error) {
+      setItems(prev => prev.filter(i => i.id !== id));
+      if (selectedItemForAi?.id === id) setSelectedItemForAi(null);
     }
   };
 
-  const startCamera = async () => {
-    setCameraActive(true);
-    setScanError(null);
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "environment" }
-      });
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play();
+  const askFoodAi = async (question: string) => {
+    if (!selectedItemForAi) return;
 
-        if ("BarcodeDetector" in window) {
-          const detector = new (window as any).BarcodeDetector({
-            formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"]
-          });
+    if (!apiKey) {
+      setAiResponse("Missing VITE_GEMINI_API_KEY in your .env file.");
+      return;
+    }
 
-          const interval = setInterval(async () => {
-            if (videoRef.current && videoRef.current.readyState === 4) {
+    setAiLoading(true);
+    setAiResponse("");
+
+    const prompt = `You are a certified food safety scientist and clinical nutritionist.
+
+Target Item: ${selectedItemForAi.name}
+Category: ${selectedItemForAi.category}
+Inquiry: ${question}
+
+MANDATORY RESPONSE GUIDELINES:
+1. Address EXCLUSIVELY the specific query asked about this exact product. Do not veer into general healthy eating advice.
+2. Structure the analysis to be professional, technical, and in-depth.
+3. The response length MUST strictly exceed 10 structured lines of content (aim for 11 to 15 lines).
+4. Strictly NO introductory conversational filler (no "Sure", "Hello", "Here is your breakdown", "As an AI").
+5. Strictly NO concluding pleasantries, advice disclaimers, or sign-offs (no "Hope this helps", "Consult a doctor", "Stay healthy").
+6. Provide raw, high-value, itemized technical bullet points directly addressing the query.`;
+
+    let requestSucceeded = false;
+    let accumulatedText = "";
+    let finalErrorMessage = "All available AI models are currently busy. Please retry in a few seconds.";
+
+    for (const model of MODEL_CASCADE) {
+      try {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey.trim()}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { 
+                maxOutputTokens: 800, 
+                temperature: 0.1,
+                thinkingConfig: {
+                  thinkingBudget: 0
+                }
+              },
+            }),
+          }
+        );
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => null);
+          const rawMsg = errorData?.error?.message || `HTTP ${response.status}`;
+          
+          if (
+            response.status === 503 || 
+            response.status === 429 || 
+            response.status === 404 ||
+            rawMsg.toLowerCase().includes("demand") ||
+            rawMsg.toLowerCase().includes("resource") ||
+            rawMsg.toLowerCase().includes("quota") ||
+            rawMsg.toLowerCase().includes("not found") ||
+            rawMsg.toLowerCase().includes("no longer available")
+          ) {
+            finalErrorMessage = rawMsg;
+            continue;
+          }
+          throw new Error(rawMsg);
+        }
+
+        const reader = response.body?.getReader();
+        if (!reader) continue;
+
+        setAiLoading(false);
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed.startsWith("data: ")) {
+              const dataStr = trimmed.replace("data: ", "").trim();
+              if (dataStr === "[DONE]") continue;
+
               try {
-                const barcodes = await detector.detect(videoRef.current);
-                if (barcodes.length > 0) {
-                  clearInterval(interval);
-                  lookupBarcode(barcodes[0].rawValue);
+                const parsed = JSON.parse(dataStr);
+                const textChunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
+                if (textChunk) {
+                  accumulatedText += textChunk;
+                  setAiResponse(accumulatedText);
+                  requestSucceeded = true;
                 }
               } catch {}
             }
-          }, 400);
+          }
         }
+
+        if (requestSucceeded) break;
+      } catch (err: any) {
+        finalErrorMessage = err.message || finalErrorMessage;
       }
-    } catch {
-      setScanError("Camera access denied. Please enter the barcode number below.");
-      setCameraActive(false);
+    }
+
+    setAiLoading(false);
+    if (!requestSucceeded) {
+      setAiResponse(`Stream Connection Failed: ${finalErrorMessage}`);
     }
   };
 
-  const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
+  const filteredItems = useMemo(() => {
+    if (!searchQuery.trim()) return items;
+    return items.filter(i => 
+      i.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      i.category.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [items, searchQuery]);
+
+  const getCategoryColor = (cat: string) => {
+    switch (cat) {
+      case "Dairy & Milk":
+        return { text: "#38bdf8", bg: "rgba(56, 189, 248, 0.12)", border: "rgba(56, 189, 248, 0.3)" };
+      case "Snacks & Chips":
+        return { text: "#fbbf24", bg: "rgba(251, 191, 36, 0.12)", border: "rgba(251, 191, 36, 0.3)" };
+      case "Beverages":
+        return { text: "#c084fc", bg: "rgba(192, 132, 252, 0.12)", border: "rgba(192, 132, 252, 0.3)" };
+      case "Fruits & Veggies":
+        return { text: "#4ade80", bg: "rgba(74, 222, 128, 0.12)", border: "rgba(74, 222, 128, 0.3)" };
+      default:
+        return { text: "#818cf8", bg: "rgba(129, 140, 248, 0.12)", border: "rgba(129, 140, 248, 0.3)" };
     }
-    setCameraActive(false);
   };
-
-  const handleReviewSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!scannedProduct || !newReviewText.trim()) return;
-
-    setIsSubmittingReview(true);
-    const payload = {
-      user_id: session.user.id,
-      user_email: session.user.email,
-      barcode: scannedProduct.barcode,
-      product_name: scannedProduct.name,
-      rating: newRating,
-      review_text: newReviewText.trim(),
-    };
-
-    const { data, error } = await supabase.from("product_reviews").insert([payload]).select();
-
-    if (!error && data) {
-      setReviews(prev => [data[0] as ProductReview, ...prev]);
-      setNewReviewText("");
-      setNewRating(5);
-    } else {
-      alert(error?.message || "Failed to submit review.");
-    }
-    setIsSubmittingReview(false);
-  };
-
-  const averageRating = useMemo(() => {
-    if (reviews.length === 0) return 0;
-    const sum = reviews.reduce((acc, r) => acc + r.rating, 0);
-    return (sum / reviews.length).toFixed(1);
-  }, [reviews]);
 
   return (
-    <div className="page-wrapper" style={{ alignItems: "center" }}>
-      <div style={{ width: "100%", maxWidth: "800px" }}>
+    <div style={{
+      width: "100%",
+      minHeight: "100dvh",
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "center",
+      background: "#000000",
+      padding: "1.25rem 1rem 3rem 1rem",
+      color: "#ffffff"
+    }}>
+      <div style={{ width: "100%", maxWidth: "680px", display: "flex", flexDirection: "column", gap: "1.25rem" }}>
         
         {/* Header */}
-        <header style={{ 
-          display: "grid", 
-          gridTemplateColumns: "1fr auto 1fr", 
-          alignItems: "center", 
-          paddingBottom: "1.25rem", 
-          borderBottom: "1px solid var(--border)", 
-          marginBottom: "1.25rem" 
+        <header style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "1rem 1.25rem",
+          background: "rgba(14, 14, 18, 0.95)",
+          border: "1px solid rgba(255, 255, 255, 0.08)",
+          borderRadius: "20px",
+          boxShadow: "0 10px 30px -10px rgba(0, 0, 0, 0.9), 0 0 25px -5px rgba(99, 102, 241, 0.18)"
         }}>
-          <div style={{ display: "flex", flexDirection: "column", justifySelf: "start" }}>
-            <span style={{ fontSize: "1.05rem", fontWeight: 700, color: "#ffffff" }}>Hello!</span>
-            <p style={{ fontSize: "0.75rem", color: "var(--text-muted)", marginTop: "0.15rem" }}>{session.user.email}</p>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <span style={{
+                fontSize: "1.25rem",
+                fontWeight: 800,
+                background: "linear-gradient(135deg, #ffffff 30%, #a5b4fc 100%)",
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+                letterSpacing: "-0.03em"
+              }}>
+                Consumer Hub
+              </span>
+              <span style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.3rem",
+                fontSize: "0.68rem",
+                fontWeight: 700,
+                padding: "0.2rem 0.55rem",
+                borderRadius: "999px",
+                background: "rgba(129, 140, 248, 0.15)",
+                color: "#c7d2fe",
+                border: "1px solid rgba(129, 140, 248, 0.35)",
+                boxShadow: "0 0 10px rgba(129, 140, 248, 0.25)"
+              }}>
+                <Sparkle size={10} fill="#818cf8" color="#818cf8" /> Live Stream
+              </span>
+            </div>
+            <p style={{ fontSize: "0.76rem", color: "#94a3b8", marginTop: "0.2rem" }}>
+              {session.user.email}
+            </p>
           </div>
 
-          <h1 style={{ 
-            fontSize: "1.25rem", 
-            fontWeight: 700, 
-            color: "#ffffff", 
-            letterSpacing: "0.01em",
-            textAlign: "center",
-            margin: 0,
-            textShadow: "0 0 10px rgba(255, 255, 255, 0.45), 0 0 20px rgba(255, 255, 255, 0.2)"
-          }}>
-            Consumer Hub
-          </h1>
-
-          <button 
-            onClick={onSignOut} 
-            style={{ 
-              justifySelf: "end",
-              background: "transparent", 
-              color: "var(--text-muted)", 
-              border: "1px solid var(--border)", 
-              padding: "0.45rem 0.75rem", 
-              borderRadius: "8px", 
-              cursor: "pointer", 
-              display: "flex", 
-              alignItems: "center", 
-              gap: "0.4rem", 
-              fontSize: "0.82rem" 
+          <button
+            onClick={onSignOut}
+            style={{
+              background: "rgba(255, 255, 255, 0.05)",
+              color: "#f87171",
+              border: "1px solid rgba(248, 113, 113, 0.25)",
+              padding: "0.5rem 0.9rem",
+              borderRadius: "14px",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.45rem",
+              fontSize: "0.8rem",
+              fontWeight: 600,
+              transition: "all 0.2s ease"
             }}
           >
             <LogOut size={14} /> Exit
@@ -300,405 +335,694 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
         </header>
 
         {/* Tab Controls */}
-        <div className="nav-tab-bar">
-          <button 
-            className={`nav-tab-btn ${activeTab === "scanner" ? "active" : ""}`}
-            onClick={() => setActiveTab("scanner")}
-          >
-            <ScanLine size={15} /> Safety Scanner
-          </button>
-          <button 
-            className={`nav-tab-btn ${activeTab === "reviews" ? "active" : ""}`}
-            onClick={() => setActiveTab("reviews")}
-          >
-            <Star size={15} /> Customer Reviews
-          </button>
-          <button 
-            className={`nav-tab-btn ${activeTab === "support" ? "active" : ""}`}
-            onClick={() => setActiveTab("support")}
-          >
-            <Phone size={15} /> Care & Access
-          </button>
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr 1fr",
+          background: "rgba(12, 12, 16, 0.95)",
+          border: "1px solid rgba(255, 255, 255, 0.07)",
+          padding: "5px",
+          borderRadius: "18px",
+          boxShadow: "inset 0 1px 1px rgba(255, 255, 255, 0.05)"
+        }}>
+          {[
+            { id: "pantry", label: `My Pantry (${items.length})`, icon: ShoppingBag },
+            { id: "add", label: "Add Food", icon: PlusCircle },
+            { id: "support", label: "Help Desk", icon: LifeBuoy }
+          ].map(tab => {
+            const Icon = tab.icon;
+            const isSelected = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id as any)}
+                style={{
+                  background: isSelected 
+                    ? "linear-gradient(135deg, rgba(99, 102, 241, 0.35) 0%, rgba(139, 92, 246, 0.3) 100%)" 
+                    : "transparent",
+                  color: isSelected ? "#ffffff" : "#94a3b8",
+                  border: isSelected ? "1px solid rgba(165, 180, 252, 0.45)" : "1px solid transparent",
+                  borderRadius: "13px",
+                  padding: "0.65rem 0.2rem",
+                  fontSize: "0.84rem",
+                  fontWeight: isSelected ? 700 : 500,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "0.45rem",
+                  boxShadow: isSelected ? "0 4px 18px -2px rgba(99, 102, 241, 0.45)" : "none",
+                  transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)"
+                }}
+              >
+                <Icon size={15} color={isSelected ? "#c7d2fe" : "#64748b"} />
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
 
-        {/* 1. SAFETY SCANNER & INGREDIENT VERDICT */}
-        {activeTab === "scanner" && (
+        {/* TAB 1: MY PANTRY */}
+        {activeTab === "pantry" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-            
-            <div className="clean-card" style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              <div>
-                <h3 style={{ fontSize: "1rem", fontWeight: 600 }}>Food Ingredient & Safety Inspector</h3>
-                <p style={{ fontSize: "0.82rem", marginTop: "0.2rem" }}>
-                  Scan product barcodes to check for harmful ingredients, shelf life, and storage advice[span_5](start_span)[span_5](end_span).
-                </p>
-              </div>
-
-              {/* Camera Preview */}
-              <div style={{ width: "100%", height: cameraActive ? "220px" : "auto", background: "var(--surface)", border: "1px dashed var(--border)", borderRadius: "10px", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative" }}>
-                {cameraActive ? (
-                  <>
-                    <video ref={videoRef} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                    <button 
-                      onClick={stopCamera} 
-                      style={{ position: "absolute", bottom: "10px", background: "rgba(0,0,0,0.75)", color: "#fff", border: "1px solid var(--border)", padding: "0.3rem 0.75rem", borderRadius: "6px", fontSize: "0.75rem", cursor: "pointer" }}
-                    >
-                      Stop Camera
-                    </button>
-                  </>
-                ) : (
-                  <button 
-                    onClick={startCamera} 
-                    style={{ background: "transparent", color: "var(--text-main)", border: "none", padding: "1.75rem", display: "flex", flexDirection: "column", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}
-                  >
-                    <Camera size={28} color="var(--text-muted)" />
-                    <span style={{ fontSize: "0.85rem", fontWeight: 500 }}>Open Camera to Scan Barcode</span>
-                  </button>
-                )}
-              </div>
-
-              {/* Manual Input */}
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <input 
-                  type="text" 
-                  placeholder="Or enter barcode (e.g. 8901030383742)" 
-                  value={barcodeInput}
-                  onChange={e => setBarcodeInput(e.target.value)}
-                  className="form-input"
-                />
-                <button 
-                  onClick={() => lookupBarcode(barcodeInput)}
-                  disabled={isScanning}
-                  className="btn-action" 
-                  style={{ width: "auto", padding: "0 1.25rem", height: "42px", fontSize: "0.85rem" }}
-                >
-                  {isScanning ? <Loader2 className="animate-spin" size={16} /> : "Inspect"}
-                </button>
-              </div>
-
-              {scanError && (
-                <div style={{ fontSize: "0.85rem", padding: "0.75rem", borderRadius: "8px", background: "rgba(244,63,94,0.12)", border: "1px solid rgba(244,63,94,0.3)", color: "var(--rose)" }}>
-                  {scanError}
-                </div>
-              )}
+            <div style={{ position: "relative" }}>
+              <Search size={16} color="#6366f1" style={{ position: "absolute", left: "14px", top: "14px" }} />
+              <input 
+                type="text"
+                placeholder="Search logged food items..."
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                style={{
+                  width: "100%",
+                  height: "44px",
+                  paddingLeft: "40px",
+                  paddingRight: "14px",
+                  background: "rgba(14, 14, 18, 0.95)",
+                  border: "1px solid rgba(99, 102, 241, 0.25)",
+                  borderRadius: "16px",
+                  color: "#ffffff",
+                  fontSize: "0.9rem",
+                  outline: "none",
+                  boxShadow: "0 4px 20px -5px rgba(0, 0, 0, 0.6)"
+                }}
+              />
             </div>
 
-            {/* SCAN RESULTS */}
-            {scannedProduct && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-                
-                {/* Verdict Header */}
-                <div className="clean-card" style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.5rem" }}>
-                    <div>
-                      <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>{scannedProduct.brand || "Packaged Good"}</span>
-                      <h2 style={{ fontSize: "1.2rem", fontWeight: 700, color: "#fff" }}>{scannedProduct.name}</h2>
-                      <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Barcode: {scannedProduct.barcode}</span>
-                    </div>
-
-                    <div style={{
-                      padding: "0.35rem 0.75rem",
-                      borderRadius: "8px",
-                      fontSize: "0.8rem",
-                      fontWeight: 700,
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "0.35rem",
-                      background: scannedProduct.healthVerdict === "HEALTHY" 
-                        ? "rgba(16, 185, 129, 0.15)" 
-                        : scannedProduct.healthVerdict === "MODERATE" 
-                        ? "rgba(245, 158, 11, 0.15)" 
-                        : "rgba(244, 63, 94, 0.15)",
-                      color: scannedProduct.healthVerdict === "HEALTHY" 
-                        ? "var(--emerald)" 
-                        : scannedProduct.healthVerdict === "MODERATE" 
-                        ? "var(--amber)" 
-                        : "var(--rose)",
-                      border: `1px solid ${scannedProduct.healthVerdict === "HEALTHY" ? "rgba(16,185,129,0.3)" : scannedProduct.healthVerdict === "MODERATE" ? "rgba(245,158,11,0.3)" : "rgba(244,63,94,0.3)"}`
-                    }}>
-                      {scannedProduct.healthVerdict === "HEALTHY" && <ShieldCheck size={16} />}
-                      {scannedProduct.healthVerdict === "MODERATE" && <AlertTriangle size={16} />}
-                      {scannedProduct.healthVerdict === "UNHEALTHY" && <ShieldAlert size={16} />}
-                      {scannedProduct.healthVerdict}
-                    </div>
-                  </div>
-
-                  {(scannedProduct.nutriScore || scannedProduct.novaGroup) && (
-                    <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", borderTop: "1px solid var(--border)", paddingTop: "0.75rem" }}>
-                      {scannedProduct.nutriScore && (
-                        <div style={{ fontSize: "0.75rem", padding: "0.2rem 0.5rem", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "6px" }}>
-                          Nutri-Score: <strong>Grade {scannedProduct.nutriScore}</strong>
-                        </div>
-                      )}
-                      {scannedProduct.novaGroup && (
-                        <div style={{ fontSize: "0.75rem", padding: "0.2rem 0.5rem", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: "6px" }}>
-                          Processing: <strong>NOVA Group {scannedProduct.novaGroup}</strong>
-                        </div>
-                      )}
-                    </div>
-                  )}
+            {loadingItems ? (
+              <div style={{ textAlign: "center", padding: "3rem" }}>
+                <Loader2 className="animate-spin" size={26} style={{ margin: "0 auto", color: "#818cf8" }} />
+              </div>
+            ) : filteredItems.length === 0 ? (
+              <div style={{
+                textAlign: "center",
+                padding: "3.5rem 1.5rem",
+                background: "rgba(14, 14, 18, 0.95)",
+                border: "1px solid rgba(255, 255, 255, 0.08)",
+                borderRadius: "22px",
+                boxShadow: "0 10px 30px rgba(0, 0, 0, 0.5)"
+              }}>
+                <div style={{
+                  width: "56px",
+                  height: "56px",
+                  background: "radial-gradient(circle, rgba(99, 102, 241, 0.25) 0%, transparent 70%)",
+                  border: "1px solid rgba(99, 102, 241, 0.35)",
+                  borderRadius: "18px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  margin: "0 auto 1.25rem",
+                  boxShadow: "0 0 25px rgba(99, 102, 241, 0.3)"
+                }}>
+                  <ShoppingBag size={24} color="#a5b4fc" />
                 </div>
-
-                {/* 1. Ingredients Audit */}
-                <div className="clean-card" style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                  <h3 style={{ fontSize: "0.95rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                    <HeartPulse size={16} color="var(--rose)" /> Ingredients & Health Checklist[span_6](start_span)[span_6](end_span)
-                  </h3>
-
-                  <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                    {scannedProduct.flags.map((flag, idx) => (
-                      <div key={idx} style={{ 
-                        display: "flex", 
-                        alignItems: "flex-start", 
-                        gap: "0.6rem", 
-                        padding: "0.65rem", 
-                        borderRadius: "8px", 
-                        background: "var(--surface)", 
-                        border: "1px solid var(--border)" 
-                      }}>
-                        {flag.type === "danger" && <ShieldAlert size={16} color="var(--rose)" style={{ marginTop: "2px", flexShrink: 0 }} />}
-                        {flag.type === "warn" && <AlertTriangle size={16} color="var(--amber)" style={{ marginTop: "2px", flexShrink: 0 }} />}
-                        {flag.type === "safe" && <ShieldCheck size={16} color="var(--emerald)" style={{ marginTop: "2px", flexShrink: 0 }} />}
-                        <div>
-                          <div style={{ fontSize: "0.85rem", fontWeight: 600, color: flag.type === "danger" ? "var(--rose)" : flag.type === "warn" ? "var(--amber)" : "var(--emerald)" }}>
-                            {flag.label}
-                          </div>
-                          <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", marginTop: "0.15rem" }}>
-                            {flag.detail}
-                          </div>
+                <h3 style={{ fontSize: "1.1rem", fontWeight: 700, color: "#fff" }}>Pantry is Empty</h3>
+                <p style={{ fontSize: "0.84rem", color: "#94a3b8", marginTop: "0.35rem", marginBottom: "1.5rem", maxWidth: "340px", marginInline: "auto" }}>
+                  Log grocery items you purchased to run instant professional AI analysis on ingredients, macros, and storage rules.
+                </p>
+                <button 
+                  onClick={() => setActiveTab("add")}
+                  style={{
+                    background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+                    color: "#ffffff",
+                    border: "none",
+                    borderRadius: "14px",
+                    padding: "0.7rem 1.5rem",
+                    fontSize: "0.88rem",
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "0.5rem",
+                    boxShadow: "0 6px 20px -2px rgba(99, 102, 241, 0.5)"
+                  }}
+                >
+                  <PlusCircle size={16} /> Add First Item
+                </button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
+                {filteredItems.map(item => {
+                  const catTheme = getCategoryColor(item.category);
+                  return (
+                    <div 
+                      key={item.id} 
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        padding: "1.1rem 1.25rem",
+                        background: "rgba(14, 14, 18, 0.95)",
+                        border: "1px solid rgba(255, 255, 255, 0.07)",
+                        borderRadius: "20px",
+                        boxShadow: "0 8px 25px -8px rgba(0, 0, 0, 0.6)",
+                        gap: "0.75rem",
+                        transition: "all 0.2s ease"
+                      }}
+                    >
+                      <div style={{ flex: 1 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
+                          <span style={{ fontWeight: 700, fontSize: "1rem", color: "#ffffff", letterSpacing: "-0.01em" }}>
+                            {item.name}
+                          </span>
+                          <span style={{ 
+                            fontSize: "0.74rem",
+                            fontWeight: 600,
+                            padding: "0.2rem 0.55rem",
+                            borderRadius: "999px",
+                            background: "rgba(255, 255, 255, 0.06)",
+                            border: "1px solid rgba(255, 255, 255, 0.12)",
+                            color: "#cbd5e1"
+                          }}>
+                            {item.quantity}
+                          </span>
+                        </div>
+                        <div style={{ marginTop: "0.35rem" }}>
+                          <span style={{
+                            fontSize: "0.72rem",
+                            fontWeight: 600,
+                            padding: "0.15rem 0.55rem",
+                            borderRadius: "8px",
+                            background: catTheme.bg,
+                            border: `1px solid ${catTheme.border}`,
+                            color: catTheme.text
+                          }}>
+                            {item.category}
+                          </span>
                         </div>
                       </div>
-                    ))}
-                  </div>
 
-                  {scannedProduct.ingredientsText && (
-                    <div style={{ marginTop: "0.5rem" }}>
-                      <span style={{ fontSize: "0.75rem", color: "var(--text-muted)", fontWeight: 600 }}>Identified Ingredients:</span>
-                      <p style={{ fontSize: "0.78rem", color: "var(--text-muted)", lineHeight: 1.4, marginTop: "0.2rem" }}>
-                        {scannedProduct.ingredientsText}
-                      </p>
-                    </div>
-                  )}
-                </div>
-
-                {/* 2. Shelf Life & Proper Storage Method */}
-                <div className="clean-card" style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                  <h3 style={{ fontSize: "0.95rem", fontWeight: 600, display: "flex", alignItems: "center", gap: "0.4rem" }}>
-                    <Thermometer size={16} color="var(--emerald)" /> Shelf Life & Storage Method[span_7](start_span)[span_7](end_span)
-                  </h3>
-
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "0.6rem" }}>
-                    <div style={{ padding: "0.65rem", borderRadius: "8px", background: "var(--surface)", border: "1px solid var(--border)" }}>
-                      <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", fontWeight: 600, marginBottom: "0.2rem" }}>Storage Method:</div>
-                      <div style={{ fontSize: "0.85rem", color: "#fff" }}>{scannedProduct.storageTip}</div>
-                    </div>
-
-                    <div style={{ padding: "0.65rem", borderRadius: "8px", background: "var(--surface)", border: "1px solid var(--border)" }}>
-                      <div style={{ fontSize: "0.78rem", color: "var(--text-muted)", fontWeight: 600, marginBottom: "0.2rem" }}>Estimated Shelf Life:</div>
-                      <div style={{ fontSize: "0.85rem", color: "#fff" }}>{scannedProduct.shelfLifeAdvice}</div>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Review Jump Button */}
-                <button 
-                  onClick={() => setActiveTab("reviews")}
-                  className="btn-action" 
-                  style={{ gap: "0.5rem" }}
-                >
-                  <MessageSquare size={16} /> Open Community Ratings & Reviews
-                </button>
-
-              </div>
-            )}
-
-          </div>
-        )}
-
-        {/* 2. RATINGS & REVIEWS (STORED IN DATABASE) */}
-        {activeTab === "reviews" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-            
-            <div className="clean-card" style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              <div>
-                <h3 style={{ fontSize: "1rem", fontWeight: 600 }}>Community Product Reviews[span_8](start_span)[span_8](end_span)</h3>
-                <p style={{ fontSize: "0.82rem", marginTop: "0.2rem" }}>
-                  Verified customer ratings stored directly in database for other shoppers[span_9](start_span)[span_9](end_span).
-                </p>
-              </div>
-
-              {scannedProduct ? (
-                <div style={{ padding: "0.75rem", background: "var(--surface)", borderRadius: "8px", border: "1px solid var(--border)" }}>
-                  <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Current Product:</div>
-                  <div style={{ fontSize: "0.95rem", fontWeight: 700, color: "#fff" }}>{scannedProduct.name}</div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.3rem", marginTop: "0.3rem" }}>
-                    <Star size={14} fill="#fbbf24" color="#fbbf24" />
-                    <span style={{ fontSize: "0.85rem", fontWeight: 700 }}>{averageRating > 0 ? averageRating : "No ratings yet"}</span>
-                    <span style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>({reviews.length} reviews)</span>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ padding: "0.75rem", background: "var(--surface)", borderRadius: "8px", border: "1px solid var(--border)", fontSize: "0.85rem", color: "var(--text-muted)" }}>
-                  Scan a barcode in the Safety Scanner tab to post or view product-specific reviews.
-                </div>
-              )}
-
-              {/* Review Submission Form */}
-              {scannedProduct && (
-                <form onSubmit={handleReviewSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-                  <div>
-                    <label style={{ fontSize: "0.78rem", color: "var(--text-muted)", display: "block", marginBottom: "0.4rem" }}>Select Rating (1-5 Stars):</label>
-                    <div style={{ display: "flex", gap: "0.4rem" }}>
-                      {[1, 2, 3, 4, 5].map(star => (
+                      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
                         <button
-                          type="button"
-                          key={star}
-                          onClick={() => setNewRating(star)}
+                          onClick={() => {
+                            setSelectedItemForAi(item);
+                            setAiResponse(null);
+                          }}
                           style={{
-                            background: "transparent",
-                            border: "none",
+                            background: "linear-gradient(135deg, rgba(99, 102, 241, 0.25) 0%, rgba(139, 92, 246, 0.3) 100%)",
+                            border: "1px solid rgba(165, 180, 252, 0.4)",
+                            color: "#ffffff",
+                            padding: "0.5rem 0.95rem",
+                            borderRadius: "14px",
+                            fontSize: "0.82rem",
+                            fontWeight: 700,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.4rem",
                             cursor: "pointer",
-                            padding: "0.2rem"
+                            boxShadow: "0 0 16px -2px rgba(99, 102, 241, 0.4)",
+                            transition: "all 0.2s ease"
                           }}
                         >
-                          <Star 
-                            size={24} 
-                            fill={star <= newRating ? "#fbbf24" : "transparent"} 
-                            color={star <= newRating ? "#fbbf24" : "var(--text-muted)"} 
-                          />
+                          <Sparkles size={14} color="#c7d2fe" /> Ask AI
                         </button>
-                      ))}
-                    </div>
-                  </div>
 
-                  <textarea 
-                    placeholder="Write your review on product freshness, taste, and packaging..."
-                    value={newReviewText}
-                    onChange={e => setNewReviewText(e.target.value)}
-                    rows={3}
-                    className="form-input"
-                    style={{ resize: "vertical" }}
-                    required
-                  />
-
-                  <button 
-                    type="submit" 
-                    disabled={isSubmittingReview} 
-                    className="btn-action" 
-                    style={{ height: "42px", fontSize: "0.88rem" }}
-                  >
-                    {isSubmittingReview ? "Saving Review..." : "Submit Review to Database"}
-                  </button>
-                </form>
-              )}
-
-              {/* Review Feed */}
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem", marginTop: "0.5rem" }}>
-                <h4 style={{ fontSize: "0.88rem", fontWeight: 600 }}>Recent Reviews</h4>
-
-                {reviews.length === 0 ? (
-                  <p style={{ fontSize: "0.82rem", color: "var(--text-muted)" }}>
-                    No reviews logged yet. Be the first to add one!
-                  </p>
-                ) : (
-                  reviews.map(r => (
-                    <div key={r.id} style={{ padding: "0.75rem", borderRadius: "8px", background: "var(--surface)", border: "1px solid var(--border)", display: "flex", flexDirection: "column", gap: "0.3rem" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                        <span style={{ fontSize: "0.78rem", fontWeight: 600, color: "#fff" }}>{r.user_email}</span>
-                        <div style={{ display: "flex", gap: "2px" }}>
-                          {[...Array(r.rating)].map((_, i) => (
-                            <Star key={i} size={12} fill="#fbbf24" color="#fbbf24" />
-                          ))}
-                        </div>
+                        <button
+                          onClick={() => handleDeleteItem(item.id)}
+                          style={{
+                            background: "rgba(255, 255, 255, 0.04)",
+                            border: "1px solid rgba(255, 255, 255, 0.08)",
+                            color: "#94a3b8",
+                            padding: "0.55rem",
+                            borderRadius: "12px",
+                            cursor: "pointer",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center"
+                          }}
+                          title="Delete item"
+                        >
+                          <Trash2 size={15} />
+                        </button>
                       </div>
-                      <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", lineHeight: 1.35 }}>{r.review_text}</p>
-                      <span style={{ fontSize: "0.7rem", color: "var(--text-muted)" }}>{new Date(r.created_at).toLocaleDateString()}</span>
                     </div>
-                  ))
-                )}
+                  );
+                })}
               </div>
-
-            </div>
-
+            )}
           </div>
         )}
 
-        {/* 3. CUSTOMER CARE & PERMISSIONS */}
-        {activeTab === "support" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-            
-            {/* Customer Care Channels */}
-            <div className="clean-card" style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              <div>
-                <h3 style={{ fontSize: "1rem", fontWeight: 600 }}>Customer Care[span_10](start_span)[span_10](end_span)</h3>
-                <p style={{ fontSize: "0.82rem", marginTop: "0.2rem" }}>
-                  Reach out directly for assistance, missing items, or food safety questions[span_11](start_span)[span_11](end_span).
-                </p>
-              </div>
-
-              <a 
-                href="tel:+919129958865" 
-                style={{ textDecoration: "none", color: "inherit", display: "flex", alignItems: "center", gap: "0.75rem", background: "var(--surface)", border: "1px solid var(--border)", padding: "0.85rem", borderRadius: "8px" }}
-              >
-                <Phone size={18} color="var(--emerald)" />
-                <div>
-                  <div style={{ fontSize: "0.88rem", fontWeight: 600 }}>Phone Hotline[span_12](start_span)[span_12](end_span)</div>
-                  <div style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>+91 91299 58865[span_13](start_span)[span_13](end_span)</div>
-                </div>
-              </a>
-
-              <a 
-                href="mailto:anaadigeet75@gmail.com" 
-                style={{ textDecoration: "none", color: "inherit", display: "flex", alignItems: "center", gap: "0.75rem", background: "var(--surface)", border: "1px solid var(--border)", padding: "0.85rem", borderRadius: "8px" }}
-              >
-                <Mail size={18} color="#ffffff" />
-                <div>
-                  <div style={{ fontSize: "0.88rem", fontWeight: 600 }}>Gmail Desk[span_14](start_span)[span_14](end_span)</div>
-                  <div style={{ fontSize: "0.78rem", color: "var(--text-muted)" }}>anaadigeet75@gmail.com</div>
-                </div>
-              </a>
+        {/* TAB 2: ADD TO PANTRY */}
+        {activeTab === "add" && (
+          <div style={{
+            background: "rgba(14, 14, 18, 0.95)",
+            border: "1px solid rgba(255, 255, 255, 0.08)",
+            borderRadius: "22px",
+            padding: "1.5rem",
+            display: "flex",
+            flexDirection: "column",
+            gap: "1.25rem",
+            boxShadow: "0 10px 30px rgba(0, 0, 0, 0.6)"
+          }}>
+            <div>
+              <h3 style={{ fontSize: "1.15rem", fontWeight: 700, color: "#fff" }}>Add Food to Pantry</h3>
+              <p style={{ fontSize: "0.82rem", color: "#94a3b8", marginTop: "0.2rem" }}>
+                Keep an ongoing log of items you brought home for instant AI nutritional reviews.
+              </p>
             </div>
 
-            {/* Basic Permissions */}
-            <div className="clean-card" style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              <div>
-                <h3 style={{ fontSize: "1rem", fontWeight: 600 }}>Basic Permissions[span_15](start_span)[span_15](end_span)</h3>
-                <p style={{ fontSize: "0.82rem", marginTop: "0.2rem" }}>
-                  Manage notifications and camera access on your device[span_16](start_span)[span_16](end_span).
-                </p>
+            <div>
+              <span style={{ fontSize: "0.75rem", color: "#94a3b8", display: "block", marginBottom: "0.5rem", fontWeight: 600 }}>
+                Instant Food Presets:
+              </span>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
+                {[
+                  { name: "Amul Gold Milk", cat: "Dairy & Milk", qty: "1 Litre" },
+                  { name: "Whole Wheat Bread", cat: "Daily Staples", qty: "400g" },
+                  { name: "Brown Eggs", cat: "Daily Staples", qty: "6 pack" },
+                  { name: "Maggi 2-Minute Noodles", cat: "Snacks & Chips", qty: "4 pack" },
+                  { name: "Lays Classic Salted", cat: "Snacks & Chips", qty: "1 packet" }
+                ].map(preset => (
+                  <button
+                    key={preset.name}
+                    type="button"
+                    onClick={() => {
+                      setItemName(preset.name);
+                      setItemCategory(preset.cat);
+                      setItemQuantity(preset.qty);
+                    }}
+                    style={{
+                      background: "rgba(255, 255, 255, 0.05)",
+                      border: "1px solid rgba(255, 255, 255, 0.1)",
+                      color: "#e2e8f0",
+                      fontSize: "0.78rem",
+                      padding: "0.4rem 0.75rem",
+                      borderRadius: "12px",
+                      cursor: "pointer",
+                      transition: "all 0.15s ease"
+                    }}
+                  >
+                    + {preset.name}
+                  </button>
+                ))}
               </div>
+            </div>
 
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.75rem", background: "var(--surface)", borderRadius: "8px", border: "1px solid var(--border)" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-                  <Bell size={18} color="var(--text-muted)" />
-                  <div>
-                    <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>Notifications[span_17](start_span)[span_17](end_span)</div>
-                    <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Receive alerts on product safety updates and deals</div>
-                  </div>
-                </div>
+            <form onSubmit={handleAddItem} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+              <div>
+                <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#cbd5e1", display: "block", marginBottom: "0.35rem" }}>
+                  Product Name
+                </label>
                 <input 
-                  type="checkbox" 
-                  checked={notificationsEnabled} 
-                  onChange={e => setNotificationsEnabled(e.target.checked)}
-                  style={{ width: "18px", height: "18px", cursor: "pointer", accentColor: "#ffffff" }}
+                  type="text"
+                  placeholder="e.g. Greek Yogurt, Basmati Rice, Peanut Butter"
+                  value={itemName}
+                  onChange={e => setItemName(e.target.value)}
+                  style={{
+                    width: "100%",
+                    height: "46px",
+                    background: "#000000",
+                    border: "1px solid rgba(99, 102, 241, 0.25)",
+                    borderRadius: "14px",
+                    color: "#fff",
+                    padding: "0 1rem",
+                    fontSize: "0.9rem",
+                    outline: "none"
+                  }}
+                  required
                 />
               </div>
 
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.75rem", background: "var(--surface)", borderRadius: "8px", border: "1px solid var(--border)" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-                  <Camera size={18} color="var(--text-muted)" />
-                  <div>
-                    <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>Camera / Gallery Access[span_18](start_span)[span_18](end_span)</div>
-                    <div style={{ fontSize: "0.75rem", color: "var(--text-muted)" }}>Allows on-device barcode scanning[span_19](start_span)[span_19](end_span)</div>
-                  </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+                <div>
+                  <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#cbd5e1", display: "block", marginBottom: "0.35rem" }}>
+                    Category
+                  </label>
+                  <select 
+                    value={itemCategory}
+                    onChange={e => setItemCategory(e.target.value)}
+                    style={{
+                      width: "100%",
+                      height: "46px",
+                      background: "#000000",
+                      border: "1px solid rgba(255, 255, 255, 0.1)",
+                      borderRadius: "14px",
+                      color: "#fff",
+                      padding: "0 0.85rem",
+                      fontSize: "0.85rem",
+                      outline: "none"
+                    }}
+                  >
+                    <option value="Daily Staples">Daily Staples</option>
+                    <option value="Dairy & Milk">Dairy & Milk</option>
+                    <option value="Snacks & Chips">Snacks & Chips</option>
+                    <option value="Beverages">Beverages</option>
+                    <option value="Sauces & Spreads">Sauces & Spreads</option>
+                    <option value="Fruits & Veggies">Fruits & Veggies</option>
+                  </select>
                 </div>
-                <span style={{ fontSize: "0.75rem", color: "var(--emerald)", fontWeight: 600 }}>Permitted</span>
+
+                <div>
+                  <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#cbd5e1", display: "block", marginBottom: "0.35rem" }}>
+                    Quantity / Pack
+                  </label>
+                  <input 
+                    type="text"
+                    placeholder="e.g. 500g, 2 packets"
+                    value={itemQuantity}
+                    onChange={e => setItemQuantity(e.target.value)}
+                    style={{
+                      width: "100%",
+                      height: "46px",
+                      background: "#000000",
+                      border: "1px solid rgba(255, 255, 255, 0.1)",
+                      borderRadius: "14px",
+                      color: "#fff",
+                      padding: "0 1rem",
+                      fontSize: "0.9rem",
+                      outline: "none"
+                    }}
+                  />
+                </div>
+              </div>
+
+              <button 
+                type="submit" 
+                disabled={isSubmitting} 
+                style={{
+                  height: "48px",
+                  background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+                  color: "#ffffff",
+                  border: "none",
+                  borderRadius: "16px",
+                  fontSize: "0.92rem",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "0.5rem",
+                  boxShadow: "0 6px 20px -3px rgba(99, 102, 241, 0.55)",
+                  marginTop: "0.5rem"
+                }}
+              >
+                {isSubmitting ? "Adding to Pantry..." : "Save to My Pantry"}
+              </button>
+            </form>
+          </div>
+        )}
+
+        {/* TAB 3: HELP & SUPPORT DESK */}
+        {activeTab === "support" && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+            <div style={{
+              background: "rgba(14, 14, 18, 0.95)",
+              border: "1px solid rgba(255, 255, 255, 0.08)",
+              borderRadius: "22px",
+              padding: "1.5rem",
+              display: "flex",
+              flexDirection: "column",
+              gap: "1rem",
+              boxShadow: "0 10px 30px rgba(0, 0, 0, 0.6)"
+            }}>
+              <div>
+                <h3 style={{ fontSize: "1.1rem", fontWeight: 700, color: "#fff" }}>Customer Concierge Desk</h3>
+                <p style={{ fontSize: "0.82rem", color: "#94a3b8", marginTop: "0.2rem" }}>
+                  Direct assistance for account synchronization, grocery inquiries, and app support.
+                </p>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "0.65rem" }}>
+                <a 
+                  href="tel:+919129958865"
+                  style={{ 
+                    textDecoration: "none", 
+                    color: "inherit", 
+                    display: "flex", 
+                    alignItems: "center", 
+                    justifyContent: "space-between",
+                    padding: "0.9rem 1.15rem", 
+                    background: "rgba(255, 255, 255, 0.03)", 
+                    border: "1px solid rgba(255, 255, 255, 0.07)", 
+                    borderRadius: "16px" 
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
+                    <div style={{ width: "36px", height: "36px", borderRadius: "12px", background: "rgba(16, 185, 129, 0.15)", border: "1px solid rgba(16, 185, 129, 0.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <Phone size={17} color="#34d399" />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "#fff" }}>Direct Helpline</div>
+                      <div style={{ fontSize: "0.76rem", color: "#94a3b8" }}>+91 91299 58865</div>
+                    </div>
+                  </div>
+                  <ChevronRight size={16} color="#64748b" />
+                </a>
+
+                <a 
+                  href="https://wa.me/919129958865?text=Hello%20QuickPick%20Support"
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ 
+                    textDecoration: "none", 
+                    color: "inherit", 
+                    display: "flex", 
+                    alignItems: "center", 
+                    justifyContent: "space-between",
+                    padding: "0.9rem 1.15rem", 
+                    background: "rgba(255, 255, 255, 0.03)", 
+                    border: "1px solid rgba(255, 255, 255, 0.07)", 
+                    borderRadius: "16px" 
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
+                    <div style={{ width: "36px", height: "36px", borderRadius: "12px", background: "rgba(34, 197, 94, 0.15)", border: "1px solid rgba(34, 197, 94, 0.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <MessageCircle size={17} color="#4ade80" />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "#fff" }}>WhatsApp Desk</div>
+                      <div style={{ fontSize: "0.76rem", color: "#94a3b8" }}>Instant live chat support</div>
+                    </div>
+                  </div>
+                  <ChevronRight size={16} color="#64748b" />
+                </a>
+
+                <a 
+                  href="mailto:anaadigeet75@gmail.com"
+                  style={{ 
+                    textDecoration: "none", 
+                    color: "inherit", 
+                    display: "flex", 
+                    alignItems: "center", 
+                    justifyContent: "space-between",
+                    padding: "0.9rem 1.15rem", 
+                    background: "rgba(255, 255, 255, 0.03)", 
+                    border: "1px solid rgba(255, 255, 255, 0.07)", 
+                    borderRadius: "16px" 
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
+                    <div style={{ width: "36px", height: "36px", borderRadius: "12px", background: "rgba(99, 102, 241, 0.15)", border: "1px solid rgba(99, 102, 241, 0.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <Mail size={17} color="#818cf8" />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "#fff" }}>Official Email</div>
+                      <div style={{ fontSize: "0.76rem", color: "#94a3b8" }}>anaadigeet75@gmail.com</div>
+                    </div>
+                  </div>
+                  <ChevronRight size={16} color="#64748b" />
+                </a>
               </div>
             </div>
-
           </div>
         )}
 
       </div>
+
+      {/* AI Modal with SSE Output */}
+      {selectedItemForAi && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: "rgba(0,0,0,0.88)",
+          backdropFilter: "blur(10px)",
+          WebkitBackdropFilter: "blur(10px)",
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "center",
+          zIndex: 9999
+        }}>
+          <div style={{
+            width: "100%",
+            maxWidth: "540px",
+            maxHeight: "88vh",
+            background: "#09090e",
+            border: "1px solid rgba(99, 102, 241, 0.35)",
+            boxShadow: "0 -10px 40px rgba(99, 102, 241, 0.25)",
+            borderRadius: "26px 26px 0 0",
+            padding: "1.25rem 1.25rem 2rem",
+            display: "flex",
+            flexDirection: "column",
+            gap: "1rem",
+            overflowY: "auto"
+          }}>
+            {/* Modal Header */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(255, 255, 255, 0.08)", paddingBottom: "0.75rem" }}>
+              <div>
+                <span style={{ fontSize: "0.7rem", color: "#818cf8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  Product Intelligence Analysis
+                </span>
+                <h3 style={{ fontSize: "1.15rem", fontWeight: 800, color: "#fff" }}>
+                  {selectedItemForAi.name}
+                </h3>
+              </div>
+              <button 
+                onClick={() => setSelectedItemForAi(null)}
+                style={{ background: "rgba(255, 255, 255, 0.06)", border: "none", color: "#94a3b8", cursor: "pointer", width: "32px", height: "32px", borderRadius: "10px", display: "flex", alignItems: "center", justifyContent: "center" }}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Quick Action Preset Chips */}
+            <div>
+              <span style={{ fontSize: "0.75rem", color: "#94a3b8", display: "block", marginBottom: "0.45rem", fontWeight: 600 }}>
+                Select a Question:
+              </span>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.45rem" }}>
+                {[
+                  {
+                    title: "Health & Safety Check",
+                    query: "Is this healthy and safe to eat regularly? What are the key health warnings or processed red flags?",
+                    icon: ShieldCheck,
+                    color: "#34d399",
+                    bg: "rgba(16, 185, 129, 0.12)",
+                    border: "rgba(16, 185, 129, 0.25)"
+                  },
+                  {
+                    title: "Calorie & Macro Info",
+                    query: "How many calories, fats, carbs, and proteins does this typically contain per standard serving?",
+                    icon: Flame,
+                    color: "#fbbf24",
+                    bg: "rgba(251, 191, 36, 0.12)",
+                    border: "rgba(251, 191, 36, 0.25)"
+                  },
+                  {
+                    title: "Shelf Life & Storage",
+                    query: "How should I store this properly (pantry vs fridge) and what is its typical shelf life after opening?",
+                    icon: ThermometerSnowflake,
+                    color: "#38bdf8",
+                    bg: "rgba(56, 189, 248, 0.12)",
+                    border: "rgba(56, 189, 248, 0.25)"
+                  },
+                  {
+                    title: "Quick Meal Ideas",
+                    query: "Give me 2 quick, healthy everyday snacks or recipe ideas using this item.",
+                    icon: ChefHat,
+                    color: "#c084fc",
+                    bg: "rgba(192, 132, 252, 0.12)",
+                    border: "rgba(192, 132, 252, 0.25)"
+                  }
+                ].map((chip, idx) => {
+                  const ChipIcon = chip.icon;
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => askFoodAi(chip.query)}
+                      style={{
+                        background: chip.bg,
+                        border: `1px solid ${chip.border}`,
+                        color: "#fff",
+                        borderRadius: "14px",
+                        padding: "0.6rem 0.75rem",
+                        fontSize: "0.78rem",
+                        fontWeight: 600,
+                        textAlign: "left",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.45rem",
+                        cursor: "pointer"
+                      }}
+                    >
+                      <ChipIcon size={15} color={chip.color} /> {chip.title}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Custom Query Bar */}
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <input 
+                type="text"
+                placeholder="Or type custom question..."
+                value={customQuery}
+                onChange={e => setCustomQuery(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === "Enter" && customQuery.trim()) {
+                    askFoodAi(customQuery);
+                    setCustomQuery("");
+                  }
+                }}
+                style={{
+                  flex: 1,
+                  height: "44px",
+                  background: "#000000",
+                  border: "1px solid rgba(255, 255, 255, 0.12)",
+                  borderRadius: "14px",
+                  padding: "0 1rem",
+                  color: "#fff",
+                  fontSize: "0.85rem",
+                  outline: "none"
+                }}
+              />
+              <button
+                onClick={() => {
+                  if (customQuery.trim()) {
+                    askFoodAi(customQuery);
+                    setCustomQuery("");
+                  }
+                }}
+                disabled={aiLoading || !customQuery.trim()}
+                style={{
+                  background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+                  color: "#ffffff",
+                  border: "none",
+                  borderRadius: "14px",
+                  padding: "0 1rem",
+                  cursor: "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center"
+                }}
+              >
+                <Send size={15} />
+              </button>
+            </div>
+
+            {/* Live Streaming Response Block */}
+            {aiLoading && (
+              <div style={{ padding: "1.75rem", textAlign: "center", color: "#a5b4fc", fontSize: "0.85rem", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
+                <Loader2 className="animate-spin" size={17} /> Analyzing...
+              </div>
+            )}
+
+            {aiResponse && (
+              <div style={{
+                background: "rgba(14, 14, 20, 0.95)",
+                border: "1px solid rgba(165, 180, 252, 0.25)",
+                borderRadius: "16px",
+                padding: "1.1rem",
+                fontSize: "0.85rem",
+                color: "#f1f5f9",
+                lineHeight: 1.6,
+                maxHeight: "320px",
+                overflowY: "auto"
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", marginBottom: "0.6rem", color: "#34d399", fontWeight: 700, fontSize: "0.8rem" }}>
+                  <Sparkles size={14} /> Technical Analysis:
+                </div>
+                <div style={{ whiteSpace: "pre-line", letterSpacing: "0.01em" }}>
+                  {aiResponse}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
