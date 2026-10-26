@@ -8,7 +8,11 @@ import {
   BarChart2, 
   ScanLine, 
   ArrowRight, 
-  Loader2 
+  Loader2,
+  CheckCircle2,
+  Sparkles,
+  ShoppingBag,
+  AlertCircle
 } from "lucide-react";
 
 export default function App() {
@@ -17,8 +21,19 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [roleSelection, setRoleSelection] = useState<"CONSUMER" | "SHOPKEEPER">("CONSUMER");
   const [savingRole, setSavingRole] = useState(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
 
   useEffect(() => {
+    // 1. Detect and cleanly handle OAuth URL errors (bad_oauth_state)
+    const params = new URLSearchParams(window.location.search);
+    const errorDesc = params.get("error_description");
+    if (errorDesc) {
+      setOauthError(errorDesc.replace(/\+/g, " "));
+      // Clean url without refreshing
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    // 2. Fetch session and subscribe to auth state
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
       if (session) fetchProfile(session.user.id);
@@ -47,6 +62,7 @@ export default function App() {
   };
 
   const handleGoogleLogin = async () => {
+    setOauthError(null);
     await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: window.location.origin },
@@ -73,11 +89,23 @@ export default function App() {
 
   const handleSignOut = () => supabase.auth.signOut();
 
-  // 1. Initial Loading
+  // 1. Loading State
   if (loading) {
     return (
-      <div className="page-wrapper" style={{ justifyContent: "center", alignItems: "center" }}>
-        <Loader2 className="animate-spin text-muted" size={24} />
+      <div style={{
+        minHeight: "100dvh",
+        width: "100%",
+        display: "flex",
+        flexDirection: "column",
+        justifyContent: "center",
+        alignItems: "center",
+        backgroundColor: "#000000",
+        color: "#ffffff"
+      }}>
+        <Loader2 className="animate-spin" size={28} color="#6366f1" />
+        <span style={{ marginTop: "0.85rem", fontSize: "0.85rem", color: "#8e8e93" }}>
+          Synchronizing Quick Pick...
+        </span>
       </div>
     );
   }
@@ -105,7 +133,7 @@ export default function App() {
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
-            gap: "1.75rem",
+            gap: "1.5rem",
             textAlign: "center"
           }}
         >
@@ -113,25 +141,48 @@ export default function App() {
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
             <div 
               style={{
-                width: "48px",
-                height: "48px",
+                width: "50px",
+                height: "50px",
                 backgroundColor: "#ffffff",
-                borderRadius: "12px",
+                borderRadius: "14px",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                marginBottom: "1rem"
+                marginBottom: "1rem",
+                boxShadow: "0 0 25px rgba(255, 255, 255, 0.2)"
               }}
             >
-              <Store size={24} color="#000000" />
+              <Store size={26} color="#000000" />
             </div>
-            <h1 style={{ fontSize: "1.75rem", fontWeight: 700, color: "#ffffff", letterSpacing: "-0.03em" }}>
+            <h1 style={{ fontSize: "1.85rem", fontWeight: 800, color: "#ffffff", letterSpacing: "-0.03em" }}>
               Quick Pick
             </h1>
             <p style={{ marginTop: "0.35rem", fontSize: "0.88rem", color: "#8e8e93" }}>
               Autonomous retail intelligence & fast operations.
             </p>
           </div>
+
+          {/* OAuth Expiration Alert Banner */}
+          {oauthError && (
+            <div style={{
+              width: "100%",
+              background: "rgba(239, 68, 68, 0.12)",
+              border: "1px solid rgba(239, 68, 68, 0.35)",
+              borderRadius: "12px",
+              padding: "0.75rem 1rem",
+              textAlign: "left",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.6rem",
+              color: "#fca5a5",
+              fontSize: "0.8rem"
+            }}>
+              <AlertCircle size={16} color="#ef4444" style={{ flexShrink: 0 }} />
+              <div>
+                <strong>Sign-in session expired.</strong> Please click below to try again.
+              </div>
+            </div>
+          )}
 
           {/* Full-Width Google Button */}
           <button 
@@ -142,14 +193,16 @@ export default function App() {
               backgroundColor: "#ffffff",
               color: "#000000",
               border: "none",
-              borderRadius: "10px",
+              borderRadius: "14px",
               fontSize: "0.95rem",
-              fontWeight: 600,
+              fontWeight: 700,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
               gap: "0.75rem",
-              cursor: "pointer"
+              cursor: "pointer",
+              transition: "transform 0.15s ease",
+              boxShadow: "0 4px 20px rgba(255, 255, 255, 0.12)"
             }}
           >
             <svg width="20" height="20" viewBox="0 0 24 24" style={{ flexShrink: 0 }}>
@@ -165,11 +218,11 @@ export default function App() {
           <div 
             style={{
               width: "100%",
-              borderTop: "1px solid #222226",
-              paddingTop: "1.5rem",
+              borderTop: "1px solid #1a1a1f",
+              paddingTop: "1.35rem",
               display: "flex",
               flexDirection: "column",
-              gap: "1rem",
+              gap: "0.9rem",
               textAlign: "left"
             }}
           >
@@ -178,9 +231,9 @@ export default function App() {
                 style={{
                   width: "36px",
                   height: "36px",
-                  backgroundColor: "#141416",
+                  backgroundColor: "#111114",
                   border: "1px solid #222226",
-                  borderRadius: "8px",
+                  borderRadius: "10px",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
@@ -191,8 +244,8 @@ export default function App() {
                 <BarChart2 size={18} />
               </div>
               <div>
-                <h3 style={{ fontSize: "0.92rem", fontWeight: 600, color: "#ffffff" }}>Live Sales Trends</h3>
-                <p style={{ fontSize: "0.8rem", color: "#8e8e93", marginTop: "0.15rem" }}>
+                <h3 style={{ fontSize: "0.92rem", fontWeight: 600, color: "#ffffff", margin: 0 }}>Live Sales Trends</h3>
+                <p style={{ fontSize: "0.8rem", color: "#8e8e93", marginTop: "0.15rem", margin: 0 }}>
                   Real-time revenue monitoring and turnover metrics in ₹ (INR).
                 </p>
               </div>
@@ -203,9 +256,9 @@ export default function App() {
                 style={{
                   width: "36px",
                   height: "36px",
-                  backgroundColor: "#141416",
+                  backgroundColor: "#111114",
                   border: "1px solid #222226",
-                  borderRadius: "8px",
+                  borderRadius: "10px",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
@@ -216,8 +269,8 @@ export default function App() {
                 <ScanLine size={18} />
               </div>
               <div>
-                <h3 style={{ fontSize: "0.92rem", fontWeight: 600, color: "#ffffff" }}>Free Barcode Scanner</h3>
-                <p style={{ fontSize: "0.8rem", color: "#8e8e93", marginTop: "0.15rem" }}>
+                <h3 style={{ fontSize: "0.92rem", fontWeight: 600, color: "#ffffff", margin: 0 }}>Free Barcode Scanner</h3>
+                <p style={{ fontSize: "0.8rem", color: "#8e8e93", marginTop: "0.15rem", margin: 0 }}>
                   Scan barcodes to auto-populate product names instantly.
                 </p>
               </div>
@@ -228,38 +281,215 @@ export default function App() {
     );
   }
 
-  // 3. Workspace Role Selection
+  // 3. Redesigned Premium OLED Role Selection Screen
   if (!profile?.role) {
     return (
-      <div className="page-wrapper">
-        <div className="auth-container">
+      <div style={{
+        minHeight: "100dvh",
+        width: "100%",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1.5rem 1rem",
+        backgroundColor: "#000000",
+        color: "#ffffff",
+        boxSizing: "border-box"
+      }}>
+        <div style={{
+          width: "100%",
+          maxWidth: "480px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "1.5rem"
+        }}>
+          {/* Header */}
           <div style={{ textAlign: "center" }}>
-            <h1>Select Workspace</h1>
-            <p style={{ marginTop: "0.4rem" }}>Select your account role to proceed.</p>
+            <span style={{
+              fontSize: "0.72rem",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              color: "#818cf8",
+              background: "rgba(129, 140, 248, 0.12)",
+              padding: "0.25rem 0.65rem",
+              borderRadius: "999px",
+              border: "1px solid rgba(129, 140, 248, 0.3)"
+            }}>
+              Onboarding
+            </span>
+            <h1 style={{
+              fontSize: "1.75rem",
+              fontWeight: 800,
+              color: "#ffffff",
+              letterSpacing: "-0.03em",
+              marginTop: "0.75rem"
+            }}>
+              Select Your Workspace
+            </h1>
+            <p style={{ fontSize: "0.86rem", color: "#8e8e93", marginTop: "0.25rem" }}>
+              How do you plan to use Quick Pick today?
+            </p>
           </div>
 
-          <div className="clean-card">
-            <div className="role-grid">
-              <div 
-                className={`role-box ${roleSelection === "CONSUMER" ? "active" : ""}`}
-                onClick={() => setRoleSelection("CONSUMER")}
-              >
-                <User size={24} />
-                <span>Consumer</span>
+          {/* Selection Cards */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.9rem" }}>
+            
+            {/* Card 1: Consumer Role */}
+            <div 
+              onClick={() => setRoleSelection("CONSUMER")}
+              style={{
+                cursor: "pointer",
+                padding: "1.25rem",
+                borderRadius: "18px",
+                background: roleSelection === "CONSUMER" 
+                  ? "rgba(99, 102, 241, 0.1)" 
+                  : "#09090c",
+                border: roleSelection === "CONSUMER"
+                  ? "2px solid #6366f1"
+                  : "1px solid rgba(255, 255, 255, 0.08)",
+                boxShadow: roleSelection === "CONSUMER"
+                  ? "0 0 25px -5px rgba(99, 102, 241, 0.3)"
+                  : "none",
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "1rem",
+                transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)"
+              }}
+            >
+              <div style={{
+                width: "44px",
+                height: "44px",
+                borderRadius: "14px",
+                background: roleSelection === "CONSUMER"
+                  ? "linear-gradient(135deg, #6366f1, #8b5cf6)"
+                  : "rgba(255, 255, 255, 0.05)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0
+              }}>
+                <ShoppingBag size={22} color="#ffffff" />
               </div>
-              <div 
-                className={`role-box ${roleSelection === "SHOPKEEPER" ? "active" : ""}`}
-                onClick={() => setRoleSelection("SHOPKEEPER")}
-              >
-                <Store size={24} />
-                <span>Shopkeeper</span>
+
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: "#ffffff", margin: 0 }}>
+                    Household Consumer
+                  </h3>
+                  {roleSelection === "CONSUMER" && (
+                    <CheckCircle2 size={18} color="#6366f1" />
+                  )}
+                </div>
+                <p style={{ fontSize: "0.82rem", color: "#94a3b8", marginTop: "0.3rem", margin: "0.3rem 0 0 0", lineHeight: 1.4 }}>
+                  Personal grocery log, pantry shelf-life tracking, and instant food safety AI reviews.
+                </p>
+                <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.6rem" }}>
+                  <span style={{ fontSize: "0.68rem", padding: "0.15rem 0.5rem", borderRadius: "6px", background: "rgba(255,255,255,0.06)", color: "#cbd5e1" }}>
+                    • Pantry Tracker
+                  </span>
+                  <span style={{ fontSize: "0.68rem", padding: "0.15rem 0.5rem", borderRadius: "6px", background: "rgba(255,255,255,0.06)", color: "#cbd5e1" }}>
+                    • AI Nutritionist
+                  </span>
+                </div>
               </div>
             </div>
 
-            <button onClick={saveRole} disabled={savingRole} className="btn-action">
-              {savingRole ? "Saving..." : "Continue"} <ArrowRight size={16} />
-            </button>
+            {/* Card 2: Shopkeeper Role */}
+            <div 
+              onClick={() => setRoleSelection("SHOPKEEPER")}
+              style={{
+                cursor: "pointer",
+                padding: "1.25rem",
+                borderRadius: "18px",
+                background: roleSelection === "SHOPKEEPER" 
+                  ? "rgba(245, 158, 11, 0.08)" 
+                  : "#09090c",
+                border: roleSelection === "SHOPKEEPER"
+                  ? "2px solid #f59e0b"
+                  : "1px solid rgba(255, 255, 255, 0.08)",
+                boxShadow: roleSelection === "SHOPKEEPER"
+                  ? "0 0 25px -5px rgba(245, 158, 11, 0.25)"
+                  : "none",
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "1rem",
+                transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)"
+              }}
+            >
+              <div style={{
+                width: "44px",
+                height: "44px",
+                borderRadius: "14px",
+                background: roleSelection === "SHOPKEEPER"
+                  ? "linear-gradient(135deg, #f59e0b, #d97706)"
+                  : "rgba(255, 255, 255, 0.05)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0
+              }}>
+                <Store size={22} color="#ffffff" />
+              </div>
+
+              <div style={{ flex: 1 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: "#ffffff", margin: 0 }}>
+                    Retail Storekeeper
+                  </h3>
+                  {roleSelection === "SHOPKEEPER" && (
+                    <CheckCircle2 size={18} color="#f59e0b" />
+                  )}
+                </div>
+                <p style={{ fontSize: "0.82rem", color: "#94a3b8", marginTop: "0.3rem", margin: "0.3rem 0 0 0", lineHeight: 1.4 }}>
+                  Camera barcode scanner, inventory stock alarms, daily revenue analytics, and WhatsApp billing.
+                </p>
+                <div style={{ display: "flex", gap: "0.4rem", marginTop: "0.6rem" }}>
+                  <span style={{ fontSize: "0.68rem", padding: "0.15rem 0.5rem", borderRadius: "6px", background: "rgba(255,255,255,0.06)", color: "#cbd5e1" }}>
+                    • Barcode POS
+                  </span>
+                  <span style={{ fontSize: "0.68rem", padding: "0.15rem 0.5rem", borderRadius: "6px", background: "rgba(255,255,255,0.06)", color: "#cbd5e1" }}>
+                    • Revenue Charts
+                  </span>
+                </div>
+              </div>
+            </div>
+
           </div>
+
+          {/* Continue Action Button */}
+          <button 
+            onClick={saveRole} 
+            disabled={savingRole}
+            style={{
+              width: "100%",
+              height: "50px",
+              background: "linear-gradient(135deg, #ffffff 0%, #e2e8f0 100%)",
+              color: "#000000",
+              border: "none",
+              borderRadius: "14px",
+              fontSize: "0.95rem",
+              fontWeight: 700,
+              cursor: savingRole ? "not-allowed" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "0.5rem",
+              marginTop: "0.25rem",
+              boxShadow: "0 6px 20px rgba(255, 255, 255, 0.15)",
+              transition: "transform 0.15s ease"
+            }}
+          >
+            {savingRole ? (
+              <>
+                <Loader2 className="animate-spin" size={16} /> Initializing Workspace...
+              </>
+            ) : (
+              <>
+                Enter Workspace <ArrowRight size={17} />
+              </>
+            )}
+          </button>
         </div>
       </div>
     );

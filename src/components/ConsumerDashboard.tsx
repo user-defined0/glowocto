@@ -12,14 +12,18 @@ import {
   Mail, 
   X, 
   Send, 
-  Loader2, 
   ChevronRight, 
   ShieldCheck, 
   Flame, 
   ThermometerSnowflake, 
   ChefHat, 
   MessageCircle, 
-  Sparkle 
+  Crown, 
+  Zap, 
+  BellRing, 
+  FileSpreadsheet, 
+  Check, 
+  AlertTriangle 
 } from "lucide-react";
 
 interface ConsumerDashboardProps {
@@ -36,17 +40,29 @@ interface PantryItem {
   created_at: string;
 }
 
-// Active Production Gemini Models
 const MODEL_CASCADE = [
+  "gemini-3.8-flash",
   "gemini-3.5-flash",
-  "gemini-3.8-flash"
+  "gemini-flash-latest"
 ];
+
+const formatCleanText = (raw: string): string => {
+  return raw
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/^\s*[\*\-]\s+/gm, "• ")
+    .replace(/\*/g, "")
+    .replace(/#{1,6}\s?/g, "")
+    .trim();
+};
 
 export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashboardProps) {
   const [activeTab, setActiveTab] = useState<"pantry" | "add" | "support">("pantry");
   const [items, setItems] = useState<PantryItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Premium Modal State
+  const [showPremiumModal, setShowPremiumModal] = useState(false);
 
   // Add Item State
   const [itemName, setItemName] = useState("");
@@ -111,6 +127,7 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
   };
 
   const handleDeleteItem = async (id: string) => {
+    if (!confirm("Are you sure you want to remove this item from your pantry?")) return;
     const { error } = await supabase.from("consumer_pantry").delete().eq("id", id);
     if (!error) {
       setItems(prev => prev.filter(i => i.id !== id));
@@ -122,123 +139,155 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
     if (!selectedItemForAi) return;
 
     if (!apiKey) {
-      setAiResponse("Missing VITE_GEMINI_API_KEY in your .env file.");
+      setAiResponse("Missing API key. Add VITE_GEMINI_API_KEY in your .env file.");
+      setAiLoading(false);
       return;
     }
 
     setAiLoading(true);
     setAiResponse("");
 
-    const prompt = `You are a certified food safety scientist and clinical nutritionist.
-
-Target Item: ${selectedItemForAi.name}
+    const prompt = `You are a certified clinical nutritionist and food safety scientist.
+Target Food: ${selectedItemForAi.name}
 Category: ${selectedItemForAi.category}
-Inquiry: ${question}
+User Question: ${question}
 
-MANDATORY RESPONSE GUIDELINES:
-1. Address EXCLUSIVELY the specific query asked about this exact product. Do not veer into general healthy eating advice.
-2. Structure the analysis to be professional, technical, and in-depth.
-3. The response length MUST strictly exceed 10 structured lines of content (aim for 11 to 15 lines).
-4. Strictly NO introductory conversational filler (no "Sure", "Hello", "Here is your breakdown", "As an AI").
-5. Strictly NO concluding pleasantries, advice disclaimers, or sign-offs (no "Hope this helps", "Consult a doctor", "Stay healthy").
-6. Provide raw, high-value, itemized technical bullet points directly addressing the query.`;
+Instructions:
+1. Provide a professional, direct, and factual technical analysis.
+2. Highlight nutritional facts, health flags, preservatives, shelf-life, and practical advice.
+3. Write clean, itemized bullet points. Avoid filler introductions and pleasantries. Finish all sentences completely.`;
 
     let requestSucceeded = false;
     let accumulatedText = "";
-    let finalErrorMessage = "All available AI models are currently busy. Please retry in a few seconds.";
+    let finalErrorMessage = "Server took too long to reply. Try again.";
 
-    for (const model of MODEL_CASCADE) {
-      try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
-          {
-            method: "POST",
-            headers: { 
-              "Content-Type": "application/json",
-              "x-goog-api-key": apiKey.trim()
-            },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: { 
-                temperature: 0.7
+    try {
+      for (const model of MODEL_CASCADE) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 25000);
+
+        try {
+          const response = await fetch(
+            `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
+            {
+              method: "POST",
+              signal: controller.signal,
+              headers: { 
+                "Content-Type": "application/json",
+                "x-goog-api-key": apiKey.trim()
               },
-            }),
-          }
-        );
+              body: JSON.stringify({
+                contents: [{ parts: [{ text: prompt }] }],
+                generationConfig: {  
+                  maxOutputTokens: 2048,
+                  temperature: 0.2
+                },
+              }),
+            }
+          );
 
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => null);
-          const rawMsg = errorData?.error?.message || `HTTP ${response.status}`;
-          
-          if (
-            response.status === 503 || 
-            response.status === 429 || 
-            response.status === 404 ||
-            rawMsg.toLowerCase().includes("demand") ||
-            rawMsg.toLowerCase().includes("resource") ||
-            rawMsg.toLowerCase().includes("quota") ||
-            rawMsg.toLowerCase().includes("not found") ||
-            rawMsg.toLowerCase().includes("no longer available")
-          ) {
-            finalErrorMessage = rawMsg;
+          clearTimeout(timeoutId);
+
+          if (!response.ok) {
+            const errorData = await response.json().catch(() => null);
+            finalErrorMessage = errorData?.error?.message || `Error ${response.status}`;
             continue;
           }
-          throw new Error(rawMsg);
-        }
 
-        const reader = response.body?.getReader();
-        if (!reader) continue;
+          const reader = response.body?.getReader();
+          if (!reader) continue;
 
-        setAiLoading(false);
-        const decoder = new TextDecoder();
-        let buffer = "";
+          const decoder = new TextDecoder();
+          let buffer = "";
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
 
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed.startsWith("data: ")) {
-              const dataStr = trimmed.replace("data: ", "").trim();
-              if (dataStr === "[DONE]") continue;
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed.startsWith("data: ")) {
+                const dataStr = trimmed.replace("data: ", "").trim();
+                if (dataStr === "[DONE]") continue;
 
-              try {
-                const parsed = JSON.parse(dataStr);
-                const textChunk = parsed.candidates?.[0]?.content?.parts?.[0]?.text;
-                if (textChunk) {
-                  accumulatedText += textChunk;
-                  setAiResponse(accumulatedText);
-                  requestSucceeded = true;
-                }
-              } catch {}
+                try {
+                  const parsed = JSON.parse(dataStr);
+                  const candidateParts = parsed.candidates?.[0]?.content?.parts || [];
+                  let textChunk = "";
+                  for (const p of candidateParts) {
+                    if (p.text && !p.thought) {
+                      textChunk += p.text;
+                    }
+                  }
+
+                  if (textChunk) {
+                    accumulatedText += textChunk;
+                    setAiResponse(formatCleanText(accumulatedText));
+                    requestSucceeded = true;
+                  }
+                } catch {}
+              }
             }
           }
+
+          if (buffer.trim().startsWith("data: ")) {
+            try {
+              const dataStr = buffer.trim().replace("data: ", "").trim();
+              if (dataStr !== "[DONE]") {
+                const parsed = JSON.parse(dataStr);
+                const candidateParts = parsed.candidates?.[0]?.content?.parts || [];
+                let textChunk = "";
+                for (const p of candidateParts) {
+                  if (p.text && !p.thought) {
+                    textChunk += p.text;
+                  }
+                }
+
+                if (textChunk) {
+                  accumulatedText += textChunk;
+                  setAiResponse(formatCleanText(accumulatedText));
+                  requestSucceeded = true;
+                }
+              }
+            } catch {}
+          }
+
+          if (requestSucceeded) break;
+        } catch (err: any) {
+          clearTimeout(timeoutId);
+          finalErrorMessage = err.name === "AbortError" 
+            ? "Connection timed out. Check your network and retry."
+            : (err.message || finalErrorMessage);
         }
-
-        if (requestSucceeded) break;
-      } catch (err: any) {
-        finalErrorMessage = err.message || finalErrorMessage;
       }
-    }
-
-    setAiLoading(false);
-    if (!requestSucceeded) {
-      setAiResponse(`Stream Connection Failed: ${finalErrorMessage}`);
+    } finally {
+      setAiLoading(false);
+      if (!requestSucceeded && accumulatedText === "") {
+        setAiResponse(`Unable to get answer. ${finalErrorMessage}`);
+      }
     }
   };
 
   const filteredItems = useMemo(() => {
     if (!searchQuery.trim()) return items;
+    const q = searchQuery.toLowerCase();
     return items.filter(i => 
-      i.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      i.category.toLowerCase().includes(searchQuery.toLowerCase())
+      i.name.toLowerCase().includes(q) ||
+      i.category.toLowerCase().includes(q)
     );
   }, [items, searchQuery]);
+
+  const categoryStats = useMemo(() => {
+    const stats: { [key: string]: number } = {};
+    items.forEach(i => {
+      stats[i.category] = (stats[i.category] || 0) + 1;
+    });
+    return stats;
+  }, [items]);
 
   const getCategoryColor = (cat: string) => {
     switch (cat) {
@@ -263,85 +312,274 @@ MANDATORY RESPONSE GUIDELINES:
       flexDirection: "column",
       alignItems: "center",
       background: "#000000",
-      padding: "1.25rem 1rem 3rem 1rem",
-      color: "#ffffff"
+      padding: "1.25rem 1rem 3.5rem 1rem",
+      color: "#ffffff",
+      fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
     }}>
-      <div style={{ width: "100%", maxWidth: "680px", display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+      <style>{`
+        .btn-tap {
+          transition: transform 0.1s ease, opacity 0.15s ease, background 0.15s ease;
+        }
+        .btn-tap:hover {
+          opacity: 0.92;
+        }
+        .btn-tap:active {
+          transform: scale(0.98);
+        }
+        @keyframes pulseDot {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.3; }
+        }
+        .stream-dot {
+          animation: pulseDot 1s infinite ease-in-out;
+        }
+
+        /* Default layout: Mobile clean container */
+        .dash-shell {
+          width: 100%;
+          max-width: 800px;
+          display: flex;
+          flex-direction: column;
+          gap: 1rem;
+        }
+        .pantry-card-grid {
+          display: flex;
+          flex-direction: column;
+          gap: 0.75rem;
+        }
+        .stats-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr 1fr;
+          gap: 0.75rem;
+        }
+        .assistant-modal-wrapper {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          background-color: rgba(0,0,0,0.85);
+          backdrop-filter: blur(10px);
+          display: flex;
+          align-items: flex-end;
+          justify-content: center;
+          z-index: 9999;
+        }
+        .assistant-modal-box {
+          width: 100%;
+          max-width: 560px;
+          max-height: 90vh;
+          background: #09090b;
+          border: 1px solid rgba(255, 255, 255, 0.2);
+          border-radius: 22px 22px 0 0;
+          padding: 1.35rem 1.35rem 2.2rem;
+          display: flex;
+          flex-direction: column;
+          gap: 1.1rem;
+          overflow-y: auto;
+        }
+
+        /* Desktop Enhancement: Fully utilizes widescreen space */
+        @media (min-width: 820px) {
+          .dash-shell {
+            max-width: 1120px !important;
+            gap: 1.35rem !important;
+          }
+          .pantry-card-grid {
+            display: grid !important;
+            grid-template-columns: repeat(2, 1fr) !important;
+            gap: 0.95rem !important;
+          }
+          @media (min-width: 1200px) {
+            .pantry-card-grid {
+              grid-template-columns: repeat(3, 1fr) !important;
+            }
+          }
+          .assistant-modal-wrapper {
+            align-items: center !important;
+            padding: 1.5rem !important;
+          }
+          .assistant-modal-box {
+            border-radius: 24px !important;
+            max-height: 84vh !important;
+            box-shadow: 0 25px 60px -15px rgba(0, 0, 0, 0.95) !important;
+          }
+        }
+      `}</style>
+
+      <div className="dash-shell">
         
         {/* Header */}
-        <header style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          padding: "1rem 1.25rem",
-          background: "rgba(14, 14, 18, 0.95)",
-          border: "1px solid rgba(255, 255, 255, 0.08)",
-          borderRadius: "20px",
-          boxShadow: "0 10px 30px -10px rgba(0, 0, 0, 0.9), 0 0 25px -5px rgba(99, 102, 241, 0.18)"
+        <header style={{ 
+          display: "flex", 
+          justifyContent: "space-between", 
+          alignItems: "center", 
+          padding: "1rem 1.25rem", 
+          background: "#09090b", 
+          border: "1px solid rgba(255, 255, 255, 0.1)", 
+          borderRadius: "18px"
         }}>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-              <span style={{
-                fontSize: "1.25rem",
-                fontWeight: 800,
-                background: "linear-gradient(135deg, #ffffff 30%, #a5b4fc 100%)",
-                WebkitBackgroundClip: "text",
-                WebkitTextFillColor: "transparent",
-                letterSpacing: "-0.03em"
-              }}>
+              <span style={{ fontSize: "1.25rem", fontWeight: 700, color: "#ffffff", letterSpacing: "-0.02em" }}>
                 Consumer Hub
               </span>
-              <span style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "0.3rem",
-                fontSize: "0.68rem",
-                fontWeight: 700,
-                padding: "0.2rem 0.55rem",
-                borderRadius: "999px",
-                background: "rgba(129, 140, 248, 0.15)",
-                color: "#c7d2fe",
-                border: "1px solid rgba(129, 140, 248, 0.35)",
-                boxShadow: "0 0 10px rgba(129, 140, 248, 0.25)"
-              }}>
-                <Sparkle size={10} fill="#818cf8" color="#818cf8" /> Live Stream
-              </span>
             </div>
-            <p style={{ fontSize: "0.76rem", color: "#94a3b8", marginTop: "0.2rem" }}>
+            <p style={{ fontSize: "0.78rem", color: "#8b8b93", marginTop: "0.15rem" }}>
               {session?.user?.email}
             </p>
           </div>
 
-          <button
-            onClick={onSignOut}
-            style={{
-              background: "rgba(255, 255, 255, 0.05)",
-              color: "#f87171",
-              border: "1px solid rgba(248, 113, 113, 0.25)",
-              padding: "0.5rem 0.9rem",
-              borderRadius: "14px",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: "0.45rem",
+          <button 
+            onClick={onSignOut} 
+            className="btn-tap"
+            style={{ 
+              background: "#000000", 
+              color: "#ffffff", 
+              border: "1px solid rgba(255, 255, 255, 0.2)", 
+              padding: "0.45rem 0.85rem", 
+              borderRadius: "12px", 
+              cursor: "pointer", 
+              display: "flex", 
+              alignItems: "center", 
+              gap: "0.4rem", 
               fontSize: "0.8rem",
-              fontWeight: 600,
-              transition: "all 0.2s ease"
+              fontWeight: 500
             }}
           >
-            <LogOut size={14} /> Exit
+            <LogOut size={14} /> Log out
           </button>
         </header>
 
-        {/* Tab Controls */}
+        {/* Consumer Premium Banner */}
+        <div 
+          onClick={() => setShowPremiumModal(true)}
+          className="btn-tap"
+          style={{
+            cursor: "pointer",
+            background: "#0c0c0e",
+            border: "1px solid rgba(229, 192, 123, 0.25)",
+            borderRadius: "16px",
+            padding: "0.85rem 1.15rem",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "0.75rem",
+            boxShadow: "0 8px 24px -10px rgba(0, 0, 0, 0.85)"
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", minWidth: 0, flex: 1 }}>
+            <div style={{
+              width: "36px",
+              height: "36px",
+              borderRadius: "10px",
+              background: "rgba(229, 192, 123, 0.08)",
+              border: "1px solid rgba(229, 192, 123, 0.2)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              flexShrink: 0
+            }}>
+              <Crown size={17} color="#e5c07b" />
+            </div>
+
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "0.45rem" }}>
+                <span style={{
+                  fontSize: "0.92rem",
+                  fontWeight: 700,
+                  color: "#ffffff",
+                  whiteSpace: "nowrap"
+                }}>
+                  Pantry Premium
+                </span>
+                <span style={{
+                  fontSize: "0.65rem",
+                  fontWeight: 600,
+                  padding: "0.1rem 0.45rem",
+                  borderRadius: "6px",
+                  background: "rgba(229, 192, 123, 0.12)",
+                  color: "#e5c07b",
+                  border: "1px solid rgba(229, 192, 123, 0.25)",
+                  whiteSpace: "nowrap"
+                }}>
+                  Trial
+                </span>
+              </div>
+              <p style={{
+                fontSize: "0.75rem",
+                color: "#8b8b93",
+                margin: "0.15rem 0 0 0",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis"
+              }}>
+                Nutritional alarms, AI recipe pairings & expiry risks
+              </p>
+            </div>
+          </div>
+
+          <div style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.2rem",
+            color: "#e5c07b",
+            fontSize: "0.78rem",
+            fontWeight: 600,
+            flexShrink: 0,
+            whiteSpace: "nowrap"
+          }}>
+            Plans <ChevronRight size={14} />
+          </div>
+        </div>
+
+        {/* Quick Numbers Bar */}
+        <div className="stats-grid">
+          <div style={{ 
+            background: "#09090b", 
+            border: "1px solid rgba(255, 255, 255, 0.1)", 
+            borderRadius: "16px", 
+            padding: "0.85rem 1rem" 
+          }}>
+            <span style={{ fontSize: "0.75rem", color: "#8b8b93" }}>Logged Items</span>
+            <p style={{ fontSize: "1.25rem", fontWeight: 700, marginTop: "0.25rem", color: "#ffffff" }}>
+              {items.length}
+            </p>
+          </div>
+
+          <div style={{ 
+            background: "#09090b", 
+            border: "1px solid rgba(255, 255, 255, 0.1)", 
+            borderRadius: "16px", 
+            padding: "0.85rem 1rem" 
+          }}>
+            <span style={{ fontSize: "0.75rem", color: "#8b8b93" }}>Categories</span>
+            <p style={{ fontSize: "1.25rem", fontWeight: 700, marginTop: "0.25rem", color: "#ffffff" }}>
+              {Object.keys(categoryStats).length}
+            </p>
+          </div>
+
+          <div style={{ 
+            background: "#09090b", 
+            border: "1px solid rgba(255, 255, 255, 0.1)", 
+            borderRadius: "16px", 
+            padding: "0.85rem 1rem" 
+          }}>
+            <span style={{ fontSize: "0.75rem", color: "#8b8b93" }}>AI Analysis</span>
+            <p style={{ fontSize: "1.25rem", fontWeight: 700, marginTop: "0.25rem", color: "#ffffff" }}>
+              Live
+            </p>
+          </div>
+        </div>
+
+        {/* Tab Switcher */}
         <div style={{
           display: "grid",
           gridTemplateColumns: "1fr 1fr 1fr",
-          background: "rgba(12, 12, 16, 0.95)",
-          border: "1px solid rgba(255, 255, 255, 0.07)",
-          padding: "5px",
-          borderRadius: "18px",
-          boxShadow: "inset 0 1px 1px rgba(255, 255, 255, 0.05)"
+          background: "#09090b", 
+          border: "1px solid rgba(255, 255, 255, 0.1)", 
+          padding: "4px", 
+          borderRadius: "16px" 
         }}>
           {[
             { id: "pantry", label: `My Pantry (${items.length})`, icon: ShoppingBag },
@@ -354,26 +592,23 @@ MANDATORY RESPONSE GUIDELINES:
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as any)}
+                className="btn-tap"
                 style={{
-                  background: isSelected 
-                    ? "linear-gradient(135deg, rgba(99, 102, 241, 0.35) 0%, rgba(139, 92, 246, 0.3) 100%)" 
-                    : "transparent",
-                  color: isSelected ? "#ffffff" : "#94a3b8",
-                  border: isSelected ? "1px solid rgba(165, 180, 252, 0.45)" : "1px solid transparent",
-                  borderRadius: "13px",
+                  background: isSelected ? "#ffffff" : "transparent",
+                  color: isSelected ? "#000000" : "#8b8b93",
+                  border: "none",
+                  borderRadius: "12px",
                   padding: "0.65rem 0.2rem",
-                  fontSize: "0.84rem",
+                  fontSize: "0.82rem",
                   fontWeight: isSelected ? 700 : 500,
                   cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  gap: "0.45rem",
-                  boxShadow: isSelected ? "0 4px 18px -2px rgba(99, 102, 241, 0.45)" : "none",
-                  transition: "all 0.2s cubic-bezier(0.4, 0, 0.2, 1)"
+                  gap: "0.4rem"
                 }}
               >
-                <Icon size={15} color={isSelected ? "#c7d2fe" : "#64748b"} />
+                <Icon size={14} color={isSelected ? "#000000" : "#8b8b93"} />
                 {tab.label}
               </button>
             );
@@ -382,174 +617,168 @@ MANDATORY RESPONSE GUIDELINES:
 
         {/* TAB 1: MY PANTRY */}
         {activeTab === "pantry" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
             <div style={{ position: "relative" }}>
-              <Search size={16} color="#6366f1" style={{ position: "absolute", left: "14px", top: "14px" }} />
+              <Search size={16} color="#71717a" style={{ position: "absolute", left: "14px", top: "14px" }} />
               <input 
-                type="text"
-                placeholder="Search logged food items..."
+                type="text" 
+                placeholder="Search food items or categories..." 
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 style={{
                   width: "100%",
                   height: "44px",
-                  paddingLeft: "40px",
+                  paddingLeft: "38px",
                   paddingRight: "14px",
-                  background: "rgba(14, 14, 18, 0.95)",
-                  border: "1px solid rgba(99, 102, 241, 0.25)",
-                  borderRadius: "16px",
-                  color: "#ffffff",
-                  fontSize: "0.9rem",
-                  outline: "none",
-                  boxShadow: "0 4px 20px -5px rgba(0, 0, 0, 0.6)"
+                  background: "#09090b", 
+                  border: "1px solid rgba(255, 255, 255, 0.12)", 
+                  borderRadius: "14px", 
+                  color: "#ffffff", 
+                  fontSize: "0.86rem", 
+                  outline: "none" 
                 }}
               />
             </div>
 
             {loadingItems ? (
-              <div style={{ textAlign: "center", padding: "3rem" }}>
-                <Loader2 className="animate-spin" size={26} style={{ margin: "0 auto", color: "#818cf8" }} />
+              <div style={{ textAlign: "center", padding: "3rem", color: "#8b8b93", fontSize: "0.85rem" }}>
+                Loading your food items...
               </div>
             ) : filteredItems.length === 0 ? (
-              <div style={{
-                textAlign: "center",
-                padding: "3.5rem 1.5rem",
-                background: "rgba(14, 14, 18, 0.95)",
-                border: "1px solid rgba(255, 255, 255, 0.08)",
-                borderRadius: "22px",
-                boxShadow: "0 10px 30px rgba(0, 0, 0, 0.5)"
+              <div style={{ 
+                background: "#09090b", 
+                border: "1px solid rgba(255, 255, 255, 0.08)", 
+                borderRadius: "18px", 
+                textAlign: "center", 
+                padding: "3.5rem 1.5rem" 
               }}>
-                <div style={{
-                  width: "56px",
-                  height: "56px",
-                  background: "radial-gradient(circle, rgba(99, 102, 241, 0.25) 0%, transparent 70%)",
-                  border: "1px solid rgba(99, 102, 241, 0.35)",
-                  borderRadius: "18px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  margin: "0 auto 1.25rem",
-                  boxShadow: "0 0 25px rgba(99, 102, 241, 0.3)"
-                }}>
-                  <ShoppingBag size={24} color="#a5b4fc" />
-                </div>
-                <h3 style={{ fontSize: "1.1rem", fontWeight: 700, color: "#fff" }}>Pantry is Empty</h3>
-                <p style={{ fontSize: "0.84rem", color: "#94a3b8", marginTop: "0.35rem", marginBottom: "1.5rem", maxWidth: "340px", marginInline: "auto" }}>
-                  Log grocery items you purchased to run instant professional AI analysis on ingredients, macros, and storage rules.
+                <ShoppingBag size={32} color="#71717a" style={{ margin: "0 auto 0.85rem" }} />
+                <h3 style={{ fontSize: "1.05rem", fontWeight: 700, color: "#ffffff", margin: 0 }}>Pantry is Empty</h3>
+                <p style={{ fontSize: "0.82rem", color: "#8b8b93", maxWidth: "320px", margin: "0.4rem auto 1.25rem" }}>
+                  Log items you brought home to run instant clinical nutrition and shelf safety reviews.
                 </p>
-                <button 
+                <button
                   onClick={() => setActiveTab("add")}
+                  className="btn-tap"
                   style={{
-                    background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
-                    color: "#ffffff",
+                    background: "#ffffff",
+                    color: "#000000",
                     border: "none",
-                    borderRadius: "14px",
-                    padding: "0.7rem 1.5rem",
-                    fontSize: "0.88rem",
+                    borderRadius: "12px",
+                    padding: "0.6rem 1.2rem",
+                    fontSize: "0.85rem",
                     fontWeight: 700,
                     cursor: "pointer",
                     display: "inline-flex",
                     alignItems: "center",
-                    gap: "0.5rem",
-                    boxShadow: "0 6px 20px -2px rgba(99, 102, 241, 0.5)"
+                    gap: "0.4rem"
                   }}
                 >
-                  <PlusCircle size={16} /> Add First Item
+                  <PlusCircle size={15} /> Add First Food Item
                 </button>
               </div>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
+              <div className="pantry-card-grid">
                 {filteredItems.map(item => {
                   const catTheme = getCategoryColor(item.category);
                   return (
                     <div 
                       key={item.id} 
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        padding: "1.1rem 1.25rem",
-                        background: "rgba(14, 14, 18, 0.95)",
-                        border: "1px solid rgba(255, 255, 255, 0.07)",
-                        borderRadius: "20px",
-                        boxShadow: "0 8px 25px -8px rgba(0, 0, 0, 0.6)",
-                        gap: "0.75rem",
-                        transition: "all 0.2s ease"
+                      style={{ 
+                        background: "#09090b", 
+                        border: "1px solid rgba(255, 255, 255, 0.1)", 
+                        borderRadius: "18px", 
+                        padding: "1rem 1.15rem", 
+                        display: "flex", 
+                        flexDirection: "column", 
+                        gap: "0.85rem" 
                       }}
                     >
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flexWrap: "wrap" }}>
-                          <span style={{ fontWeight: 700, fontSize: "1rem", color: "#ffffff", letterSpacing: "-0.01em" }}>
-                            {item.name}
-                          </span>
-                          <span style={{ 
-                            fontSize: "0.74rem",
-                            fontWeight: 600,
-                            padding: "0.2rem 0.55rem",
-                            borderRadius: "999px",
-                            background: "rgba(255, 255, 255, 0.06)",
-                            border: "1px solid rgba(255, 255, 255, 0.12)",
-                            color: "#cbd5e1"
-                          }}>
-                            {item.quantity}
-                          </span>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "0.75rem" }}>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.55rem", flexWrap: "wrap" }}>
+                            <h4 style={{ fontSize: "1rem", fontWeight: 700, color: "#ffffff", margin: 0 }}>
+                              {item.name}
+                            </h4>
+                            <span style={{
+                              fontSize: "0.7rem",
+                              fontWeight: 600,
+                              padding: "0.15rem 0.5rem",
+                              borderRadius: "999px",
+                              background: "rgba(255, 255, 255, 0.08)",
+                              border: "1px solid rgba(255, 255, 255, 0.15)",
+                              color: "#ffffff"
+                            }}>
+                              {item.quantity}
+                            </span>
+                          </div>
+
+                          <div style={{ marginTop: "0.4rem" }}>
+                            <span style={{
+                              fontSize: "0.72rem",
+                              fontWeight: 600,
+                              padding: "0.15rem 0.55rem",
+                              borderRadius: "8px",
+                              background: catTheme.bg,
+                              border: `1px solid ${catTheme.border}`,
+                              color: catTheme.text
+                            }}>
+                              {item.category}
+                            </span>
+                          </div>
                         </div>
-                        <div style={{ marginTop: "0.35rem" }}>
-                          <span style={{
-                            fontSize: "0.72rem",
-                            fontWeight: 600,
-                            padding: "0.15rem 0.55rem",
-                            borderRadius: "8px",
-                            background: catTheme.bg,
-                            border: `1px solid ${catTheme.border}`,
-                            color: catTheme.text
-                          }}>
-                            {item.category}
-                          </span>
-                        </div>
+
+                        <button 
+                          onClick={() => handleDeleteItem(item.id)}
+                          title="Remove item"
+                          className="btn-tap"
+                          style={{ 
+                            background: "transparent", 
+                            border: "1px solid rgba(255, 255, 255, 0.12)", 
+                            color: "#8b8b93", 
+                            padding: "0.45rem", 
+                            borderRadius: "10px", 
+                            cursor: "pointer",
+                            flexShrink: 0
+                          }}
+                        >
+                          <Trash2 size={13} />
+                        </button>
                       </div>
 
-                      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                      <div style={{ 
+                        display: "flex", 
+                        justifyContent: "space-between", 
+                        alignItems: "center", 
+                        paddingTop: "0.75rem", 
+                        borderTop: "1px solid rgba(255, 255, 255, 0.06)", 
+                        gap: "0.5rem" 
+                      }}>
+                        <span style={{ fontSize: "0.75rem", color: "#8b8b93" }}>
+                          Food safety & health rating
+                        </span>
+
                         <button
                           onClick={() => {
                             setSelectedItemForAi(item);
                             setAiResponse(null);
                           }}
+                          className="btn-tap"
                           style={{
-                            background: "linear-gradient(135deg, rgba(99, 102, 241, 0.25) 0%, rgba(139, 92, 246, 0.3) 100%)",
-                            border: "1px solid rgba(165, 180, 252, 0.4)",
+                            background: "rgba(255, 255, 255, 0.08)",
+                            border: "1px solid rgba(255, 255, 255, 0.16)",
                             color: "#ffffff",
-                            padding: "0.5rem 0.95rem",
-                            borderRadius: "14px",
-                            fontSize: "0.82rem",
-                            fontWeight: 700,
+                            padding: "0.45rem 0.85rem",
+                            borderRadius: "10px",
+                            fontSize: "0.78rem",
+                            fontWeight: 600,
                             display: "flex",
                             alignItems: "center",
-                            gap: "0.4rem",
-                            cursor: "pointer",
-                            boxShadow: "0 0 16px -2px rgba(99, 102, 241, 0.4)",
-                            transition: "all 0.2s ease"
+                            gap: "0.35rem",
+                            cursor: "pointer"
                           }}
                         >
-                          <Sparkles size={14} color="#c7d2fe" /> Ask AI
-                        </button>
-
-                        <button
-                          onClick={() => handleDeleteItem(item.id)}
-                          style={{
-                            background: "rgba(255, 255, 255, 0.04)",
-                            border: "1px solid rgba(255, 255, 255, 0.08)",
-                            color: "#94a3b8",
-                            padding: "0.55rem",
-                            borderRadius: "12px",
-                            cursor: "pointer",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center"
-                          }}
-                          title="Delete item"
-                        >
-                          <Trash2 size={15} />
+                          <Sparkles size={13} /> Ask AI
                         </button>
                       </div>
                     </div>
@@ -563,25 +792,24 @@ MANDATORY RESPONSE GUIDELINES:
         {/* TAB 2: ADD TO PANTRY */}
         {activeTab === "add" && (
           <div style={{
-            background: "rgba(14, 14, 18, 0.95)",
-            border: "1px solid rgba(255, 255, 255, 0.08)",
-            borderRadius: "22px",
-            padding: "1.5rem",
+            background: "#09090b",
+            border: "1px solid rgba(255, 255, 255, 0.1)",
+            borderRadius: "18px",
+            padding: "1.35rem",
             display: "flex",
             flexDirection: "column",
-            gap: "1.25rem",
-            boxShadow: "0 10px 30px rgba(0, 0, 0, 0.6)"
+            gap: "1.15rem"
           }}>
             <div>
-              <h3 style={{ fontSize: "1.15rem", fontWeight: 700, color: "#fff" }}>Add Food to Pantry</h3>
-              <p style={{ fontSize: "0.82rem", color: "#94a3b8", marginTop: "0.2rem" }}>
-                Keep an ongoing log of items you brought home for instant AI nutritional reviews.
+              <h3 style={{ fontSize: "1.1rem", fontWeight: 700, color: "#ffffff", margin: 0 }}>Add Food Item</h3>
+              <p style={{ fontSize: "0.82rem", color: "#8b8b93", marginTop: "0.25rem" }}>
+                Keep an ongoing log of home grocery items for nutrition analysis.
               </p>
             </div>
 
             <div>
-              <span style={{ fontSize: "0.75rem", color: "#94a3b8", display: "block", marginBottom: "0.5rem", fontWeight: 600 }}>
-                Instant Food Presets:
+              <span style={{ fontSize: "0.75rem", color: "#8b8b93", display: "block", marginBottom: "0.5rem" }}>
+                Quick Presets:
               </span>
               <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem" }}>
                 {[
@@ -599,15 +827,15 @@ MANDATORY RESPONSE GUIDELINES:
                       setItemCategory(preset.cat);
                       setItemQuantity(preset.qty);
                     }}
+                    className="btn-tap"
                     style={{
-                      background: "rgba(255, 255, 255, 0.05)",
-                      border: "1px solid rgba(255, 255, 255, 0.1)",
-                      color: "#e2e8f0",
+                      background: "#000000",
+                      border: "1px solid rgba(255, 255, 255, 0.14)",
+                      color: "#ffffff",
                       fontSize: "0.78rem",
                       padding: "0.4rem 0.75rem",
-                      borderRadius: "12px",
-                      cursor: "pointer",
-                      transition: "all 0.15s ease"
+                      borderRadius: "10px",
+                      cursor: "pointer"
                     }}
                   >
                     + {preset.name}
@@ -616,209 +844,216 @@ MANDATORY RESPONSE GUIDELINES:
               </div>
             </div>
 
-            <form onSubmit={handleAddItem} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-              <div>
-                <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#cbd5e1", display: "block", marginBottom: "0.35rem" }}>
-                  Product Name
-                </label>
-                <input 
-                  type="text"
-                  placeholder="e.g. Greek Yogurt, Basmati Rice, Peanut Butter"
-                  value={itemName}
-                  onChange={e => setItemName(e.target.value)}
-                  style={{
-                    width: "100%",
-                    height: "46px",
-                    background: "#000000",
-                    border: "1px solid rgba(99, 102, 241, 0.25)",
-                    borderRadius: "14px",
-                    color: "#fff",
-                    padding: "0 1rem",
-                    fontSize: "0.9rem",
-                    outline: "none"
-                  }}
-                  required
-                />
-              </div>
+            <form onSubmit={handleAddItem} style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
+              <input 
+                type="text"
+                placeholder="Product name (e.g. Greek Yogurt, Oats, Peanut Butter)"
+                value={itemName}
+                onChange={e => setItemName(e.target.value)}
+                style={{
+                  width: "100%",
+                  height: "44px",
+                  background: "#000000",
+                  border: "1px solid rgba(255, 255, 255, 0.14)",
+                  borderRadius: "12px",
+                  color: "#ffffff",
+                  padding: "0 0.95rem",
+                  fontSize: "0.85rem",
+                  outline: "none"
+                }}
+                required
+              />
 
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
-                <div>
-                  <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#cbd5e1", display: "block", marginBottom: "0.35rem" }}>
-                    Category
-                  </label>
-                  <select 
-                    value={itemCategory}
-                    onChange={e => setItemCategory(e.target.value)}
-                    style={{
-                      width: "100%",
-                      height: "46px",
-                      background: "#000000",
-                      border: "1px solid rgba(255, 255, 255, 0.1)",
-                      borderRadius: "14px",
-                      color: "#fff",
-                      padding: "0 0.85rem",
-                      fontSize: "0.85rem",
-                      outline: "none"
-                    }}
-                  >
-                    <option value="Daily Staples">Daily Staples</option>
-                    <option value="Dairy & Milk">Dairy & Milk</option>
-                    <option value="Snacks & Chips">Snacks & Chips</option>
-                    <option value="Beverages">Beverages</option>
-                    <option value="Sauces & Spreads">Sauces & Spreads</option>
-                    <option value="Fruits & Veggies">Fruits & Veggies</option>
-                  </select>
-                </div>
+                <select 
+                  value={itemCategory}
+                  onChange={e => setItemCategory(e.target.value)}
+                  style={{
+                    width: "100%",
+                    height: "44px",
+                    background: "#000000",
+                    border: "1px solid rgba(255, 255, 255, 0.14)",
+                    borderRadius: "12px",
+                    color: "#ffffff",
+                    padding: "0 0.85rem",
+                    fontSize: "0.85rem",
+                    outline: "none"
+                  }}
+                >
+                  <option value="Daily Staples">Daily Staples</option>
+                  <option value="Dairy & Milk">Dairy & Milk</option>
+                  <option value="Snacks & Chips">Snacks & Chips</option>
+                  <option value="Beverages">Beverages</option>
+                  <option value="Sauces & Spreads">Sauces & Spreads</option>
+                  <option value="Fruits & Veggies">Fruits & Veggies</option>
+                </select>
 
-                <div>
-                  <label style={{ fontSize: "0.8rem", fontWeight: 600, color: "#cbd5e1", display: "block", marginBottom: "0.35rem" }}>
-                    Quantity / Pack
-                  </label>
-                  <input 
-                    type="text"
-                    placeholder="e.g. 500g, 2 packets"
-                    value={itemQuantity}
-                    onChange={e => setItemQuantity(e.target.value)}
-                    style={{
-                      width: "100%",
-                      height: "46px",
-                      background: "#000000",
-                      border: "1px solid rgba(255, 255, 255, 0.1)",
-                      borderRadius: "14px",
-                      color: "#fff",
-                      padding: "0 1rem",
-                      fontSize: "0.9rem",
-                      outline: "none"
-                    }}
-                  />
-                </div>
+                <input 
+                  type="text"
+                  placeholder="Quantity (e.g. 500g, 2 packs)"
+                  value={itemQuantity}
+                  onChange={e => setItemQuantity(e.target.value)}
+                  style={{
+                    width: "100%",
+                    height: "44px",
+                    background: "#000000",
+                    border: "1px solid rgba(255, 255, 255, 0.14)",
+                    borderRadius: "12px",
+                    color: "#ffffff",
+                    padding: "0 0.95rem",
+                    fontSize: "0.85rem",
+                    outline: "none"
+                  }}
+                />
               </div>
 
               <button 
                 type="submit" 
                 disabled={isSubmitting} 
+                className="btn-tap"
                 style={{
-                  height: "48px",
-                  background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
-                  color: "#ffffff",
+                  height: "46px",
+                  background: "#ffffff",
+                  color: "#000000",
                   border: "none",
-                  borderRadius: "16px",
-                  fontSize: "0.92rem",
+                  borderRadius: "12px",
+                  fontSize: "0.88rem",
                   fontWeight: 700,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: "0.5rem",
-                  boxShadow: "0 6px 20px -3px rgba(99, 102, 241, 0.55)",
-                  marginTop: "0.5rem"
+                  cursor: isSubmitting ? "not-allowed" : "pointer",
+                  marginTop: "0.25rem"
                 }}
               >
-                {isSubmitting ? "Adding to Pantry..." : "Save to My Pantry"}
+                {isSubmitting ? "Saving..." : "Save to My Pantry"}
               </button>
             </form>
           </div>
         )}
 
-        {/* TAB 3: HELP & SUPPORT DESK */}
+        {/* TAB 3: HELP & SUPPORT */}
         {activeTab === "support" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
             <div style={{
-              background: "rgba(14, 14, 18, 0.95)",
-              border: "1px solid rgba(255, 255, 255, 0.08)",
-              borderRadius: "22px",
-              padding: "1.5rem",
-              display: "flex",
-              flexDirection: "column",
-              gap: "1rem",
-              boxShadow: "0 10px 30px rgba(0, 0, 0, 0.6)"
+              background: "#09090b", 
+              border: "1px solid rgba(255, 255, 255, 0.12)", 
+              borderRadius: "20px", 
+              padding: "1.5rem", 
+              display: "flex", 
+              flexDirection: "column", 
+              gap: "1.1rem" 
             }}>
               <div>
-                <h3 style={{ fontSize: "1.1rem", fontWeight: 700, color: "#fff" }}>Customer Concierge Desk</h3>
-                <p style={{ fontSize: "0.82rem", color: "#94a3b8", marginTop: "0.2rem" }}>
+                <h3 style={{ fontSize: "1.1rem", fontWeight: 700, color: "#ffffff", margin: 0 }}>Customer Concierge Desk</h3>
+                <p style={{ fontSize: "0.82rem", color: "#8b8b93", marginTop: "0.2rem" }}>
                   Direct assistance for account synchronization, grocery inquiries, and app support.
                 </p>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "0.65rem" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: "0.75rem" }}>
                 <a 
                   href="tel:+919129958865"
+                  className="btn-tap"
                   style={{ 
                     textDecoration: "none", 
                     color: "inherit", 
                     display: "flex", 
                     alignItems: "center", 
-                    justifyContent: "space-between",
-                    padding: "0.9rem 1.15rem", 
-                    background: "rgba(255, 255, 255, 0.03)", 
-                    border: "1px solid rgba(255, 255, 255, 0.07)", 
-                    borderRadius: "16px" 
+                    justifyContent: "space-between", 
+                    padding: "0.95rem 1.25rem", 
+                    background: "#000000", 
+                    border: "1px solid rgba(255, 255, 255, 0.12)", 
+                    borderRadius: "14px" 
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
-                    <div style={{ width: "36px", height: "36px", borderRadius: "12px", background: "rgba(16, 185, 129, 0.15)", border: "1px solid rgba(16, 185, 129, 0.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      <Phone size={17} color="#34d399" />
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.9rem" }}>
+                    <div style={{ 
+                      width: "36px", 
+                      height: "36px", 
+                      borderRadius: "10px", 
+                      background: "rgba(255, 255, 255, 0.08)", 
+                      display: "flex", 
+                      alignItems: "center", 
+                      justifyContent: "center" 
+                    }}>
+                      <Phone size={16} color="#ffffff" />
                     </div>
                     <div>
-                      <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "#fff" }}>Direct Helpline</div>
-                      <div style={{ fontSize: "0.76rem", color: "#94a3b8" }}>+91 91299 58865</div>
+                      <div style={{ fontSize: "0.88rem", fontWeight: 600, color: "#ffffff" }}>Direct Helpline</div>
+                      <div style={{ fontSize: "0.76rem", color: "#8b8b93", marginTop: "0.1rem" }}>+91 91299 58865</div>
                     </div>
                   </div>
-                  <ChevronRight size={16} color="#64748b" />
+                  <ChevronRight size={16} color="#71717a" />
                 </a>
 
                 <a 
-                  href="https://wa.me/919129958865?text=Hello%20QuickPick%20Support"
+                  href="https://wa.me/919129958865?text=Hello%20QuickPick%20Consumer%20Support"
                   target="_blank"
                   rel="noreferrer"
+                  className="btn-tap"
                   style={{ 
                     textDecoration: "none", 
                     color: "inherit", 
                     display: "flex", 
                     alignItems: "center", 
-                    justifyContent: "space-between",
-                    padding: "0.9rem 1.15rem", 
-                    background: "rgba(255, 255, 255, 0.03)", 
-                    border: "1px solid rgba(255, 255, 255, 0.07)", 
-                    borderRadius: "16px" 
+                    justifyContent: "space-between", 
+                    padding: "0.95rem 1.25rem", 
+                    background: "#000000", 
+                    border: "1px solid rgba(255, 255, 255, 0.12)", 
+                    borderRadius: "14px" 
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
-                    <div style={{ width: "36px", height: "36px", borderRadius: "12px", background: "rgba(34, 197, 94, 0.15)", border: "1px solid rgba(34, 197, 94, 0.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      <MessageCircle size={17} color="#4ade80" />
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.9rem" }}>
+                    <div style={{ 
+                      width: "36px", 
+                      height: "36px", 
+                      borderRadius: "10px", 
+                      background: "rgba(255, 255, 255, 0.08)", 
+                      display: "flex", 
+                      alignItems: "center", 
+                      justifyContent: "center" 
+                    }}>
+                      <MessageCircle size={16} color="#ffffff" />
                     </div>
                     <div>
-                      <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "#fff" }}>WhatsApp Desk</div>
-                      <div style={{ fontSize: "0.76rem", color: "#94a3b8" }}>Instant live chat support</div>
+                      <div style={{ fontSize: "0.88rem", fontWeight: 600, color: "#ffffff" }}>WhatsApp Desk</div>
+                      <div style={{ fontSize: "0.76rem", color: "#8b8b93", marginTop: "0.1rem" }}>Instant live chat support</div>
                     </div>
                   </div>
-                  <ChevronRight size={16} color="#64748b" />
+                  <ChevronRight size={16} color="#71717a" />
                 </a>
 
                 <a 
                   href="mailto:anaadigeet75@gmail.com"
+                  className="btn-tap"
                   style={{ 
                     textDecoration: "none", 
                     color: "inherit", 
                     display: "flex", 
                     alignItems: "center", 
-                    justifyContent: "space-between",
-                    padding: "0.9rem 1.15rem", 
-                    background: "rgba(255, 255, 255, 0.03)", 
-                    border: "1px solid rgba(255, 255, 255, 0.07)", 
-                    borderRadius: "16px" 
+                    justifyContent: "space-between", 
+                    padding: "0.95rem 1.25rem", 
+                    background: "#000000", 
+                    border: "1px solid rgba(255, 255, 255, 0.12)", 
+                    borderRadius: "14px" 
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.85rem" }}>
-                    <div style={{ width: "36px", height: "36px", borderRadius: "12px", background: "rgba(99, 102, 241, 0.15)", border: "1px solid rgba(99, 102, 241, 0.3)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      <Mail size={17} color="#818cf8" />
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.9rem" }}>
+                    <div style={{ 
+                      width: "36px", 
+                      height: "36px", 
+                      borderRadius: "10px", 
+                      background: "rgba(255, 255, 255, 0.08)", 
+                      display: "flex", 
+                      alignItems: "center", 
+                      justifyContent: "center" 
+                    }}>
+                      <Mail size={16} color="#ffffff" />
                     </div>
                     <div>
-                      <div style={{ fontSize: "0.88rem", fontWeight: 700, color: "#fff" }}>Official Email</div>
-                      <div style={{ fontSize: "0.76rem", color: "#94a3b8" }}>anaadigeet75@gmail.com</div>
+                      <div style={{ fontSize: "0.88rem", fontWeight: 600, color: "#ffffff" }}>Official Email</div>
+                      <div style={{ fontSize: "0.76rem", color: "#8b8b93", marginTop: "0.1rem" }}>anaadigeet75@gmail.com</div>
                     </div>
                   </div>
-                  <ChevronRight size={16} color="#64748b" />
+                  <ChevronRight size={16} color="#71717a" />
                 </a>
               </div>
             </div>
@@ -827,92 +1062,72 @@ MANDATORY RESPONSE GUIDELINES:
 
       </div>
 
-      {/* AI Modal with SSE Output */}
+      {/* Food Intelligence Assistant Modal (Matching Shopkeeper's Robust Engine) */}
       {selectedItemForAi && (
-        <div style={{
-          position: "fixed",
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: "rgba(0,0,0,0.88)",
-          backdropFilter: "blur(10px)",
-          WebkitBackdropFilter: "blur(10px)",
-          display: "flex",
-          alignItems: "flex-end",
-          justifyContent: "center",
-          zIndex: 9999
-        }}>
-          <div style={{
-            width: "100%",
-            maxWidth: "540px",
-            maxHeight: "88vh",
-            background: "#09090e",
-            border: "1px solid rgba(99, 102, 241, 0.35)",
-            boxShadow: "0 -10px 40px rgba(99, 102, 241, 0.25)",
-            borderRadius: "26px 26px 0 0",
-            padding: "1.25rem 1.25rem 2rem",
-            display: "flex",
-            flexDirection: "column",
-            gap: "1rem",
-            overflowY: "auto"
-          }}>
+        <div className="assistant-modal-wrapper">
+          <div className="assistant-modal-box">
             {/* Modal Header */}
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid rgba(255, 255, 255, 0.08)", paddingBottom: "0.75rem" }}>
+            <div style={{ 
+              display: "flex", 
+              justifyContent: "space-between", 
+              alignItems: "center", 
+              borderBottom: "1px solid rgba(255, 255, 255, 0.1)", 
+              paddingBottom: "0.85rem" 
+            }}>
               <div>
-                <span style={{ fontSize: "0.7rem", color: "#818cf8", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                  Product Intelligence Analysis
+                <span style={{ fontSize: "0.72rem", color: "#8b8b93", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  Clinical Food Analysis
                 </span>
-                <h3 style={{ fontSize: "1.15rem", fontWeight: 800, color: "#fff" }}>
+                <h3 style={{ fontSize: "1.15rem", fontWeight: 700, color: "#ffffff", marginTop: "0.15rem" }}>
                   {selectedItemForAi.name}
                 </h3>
               </div>
               <button 
                 onClick={() => setSelectedItemForAi(null)}
-                style={{ background: "rgba(255, 255, 255, 0.06)", border: "none", color: "#94a3b8", cursor: "pointer", width: "32px", height: "32px", borderRadius: "10px", display: "flex", alignItems: "center", justifyContent: "center" }}
+                className="btn-tap"
+                style={{ 
+                  background: "#000000", 
+                  border: "1px solid rgba(255, 255, 255, 0.16)", 
+                  color: "#ffffff", 
+                  cursor: "pointer", 
+                  width: "32px", 
+                  height: "32px", 
+                  borderRadius: "10px", 
+                  display: "flex", 
+                  alignItems: "center", 
+                  justifyContent: "center" 
+                }}
               >
                 <X size={18} />
               </button>
             </div>
 
-            {/* Quick Action Preset Chips */}
+            {/* Quick Action Chips */}
             <div>
-              <span style={{ fontSize: "0.75rem", color: "#94a3b8", display: "block", marginBottom: "0.45rem", fontWeight: 600 }}>
-                Select a Question:
+              <span style={{ fontSize: "0.75rem", color: "#8b8b93", display: "block", marginBottom: "0.5rem" }}>
+                Select an inquiry:
               </span>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.45rem" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
                 {[
                   {
-                    title: "Health & Safety Check",
-                    query: "Is this healthy and safe to eat regularly? What are the key health warnings or processed red flags?",
-                    icon: ShieldCheck,
-                    color: "#34d399",
-                    bg: "rgba(16, 185, 129, 0.12)",
-                    border: "rgba(16, 185, 129, 0.25)"
+                    title: "Health & safety check",
+                    query: "Is this healthy and safe to eat regularly? Are there harmful preservatives or flags?",
+                    icon: ShieldCheck
                   },
                   {
-                    title: "Calorie & Macro Info",
-                    query: "How many calories, fats, carbs, and proteins does this typically contain per standard serving?",
-                    icon: Flame,
-                    color: "#fbbf24",
-                    bg: "rgba(251, 191, 36, 0.12)",
-                    border: "rgba(251, 191, 36, 0.25)"
+                    title: "Calories & macros",
+                    query: "What are the typical calories, protein, carbs, and fats per serving?",
+                    icon: Flame
                   },
                   {
-                    title: "Shelf Life & Storage",
-                    query: "How should I store this properly (pantry vs fridge) and what is its typical shelf life after opening?",
-                    icon: ThermometerSnowflake,
-                    color: "#38bdf8",
-                    bg: "rgba(56, 189, 248, 0.12)",
-                    border: "rgba(56, 189, 248, 0.25)"
+                    title: "Storage & shelf life",
+                    query: "How should I store this properly (pantry vs fridge) and what is its shelf life?",
+                    icon: ThermometerSnowflake
                   },
                   {
-                    title: "Quick Meal Ideas",
-                    query: "Give me 2 quick, healthy everyday snacks or recipe ideas using this item.",
-                    icon: ChefHat,
-                    color: "#c084fc",
-                    bg: "rgba(192, 132, 252, 0.12)",
-                    border: "rgba(192, 132, 252, 0.25)"
+                    title: "Healthy meal ideas",
+                    query: "Give me 2 quick, healthy snacks or meal pairing ideas using this item.",
+                    icon: ChefHat
                   }
                 ].map((chip, idx) => {
                   const ChipIcon = chip.icon;
@@ -920,33 +1135,34 @@ MANDATORY RESPONSE GUIDELINES:
                     <button
                       key={idx}
                       onClick={() => askFoodAi(chip.query)}
+                      className="btn-tap"
                       style={{
-                        background: chip.bg,
-                        border: `1px solid ${chip.border}`,
-                        color: "#fff",
-                        borderRadius: "14px",
-                        padding: "0.6rem 0.75rem",
-                        fontSize: "0.78rem",
-                        fontWeight: 600,
-                        textAlign: "left",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "0.45rem",
-                        cursor: "pointer"
+                        background: "#000000", 
+                        border: "1px solid rgba(255, 255, 255, 0.16)", 
+                        color: "#ffffff", 
+                        borderRadius: "12px", 
+                        padding: "0.75rem 0.85rem", 
+                        fontSize: "0.78rem", 
+                        fontWeight: 600, 
+                        textAlign: "left", 
+                        display: "flex", 
+                        alignItems: "center", 
+                        gap: "0.5rem", 
+                        cursor: "pointer" 
                       }}
                     >
-                      <ChipIcon size={15} color={chip.color} /> {chip.title}
+                      <ChipIcon size={14} color="#ffffff" /> {chip.title}
                     </button>
                   );
                 })}
               </div>
             </div>
 
-            {/* Custom Query Bar */}
-            <div style={{ display: "flex", gap: "0.5rem" }}>
+            {/* Custom Input */}
+            <div style={{ display: "flex", gap: "0.55rem" }}>
               <input 
-                type="text"
-                placeholder="Or type custom question..."
+                type="text" 
+                placeholder="Ask custom question about this item..." 
                 value={customQuery}
                 onChange={e => setCustomQuery(e.target.value)}
                 onKeyDown={e => {
@@ -958,16 +1174,16 @@ MANDATORY RESPONSE GUIDELINES:
                 style={{
                   flex: 1,
                   height: "44px",
-                  background: "#000000",
-                  border: "1px solid rgba(255, 255, 255, 0.12)",
-                  borderRadius: "14px",
-                  padding: "0 1rem",
-                  color: "#fff",
-                  fontSize: "0.85rem",
-                  outline: "none"
+                  background: "#000000", 
+                  border: "1px solid rgba(255, 255, 255, 0.16)", 
+                  borderRadius: "12px", 
+                  padding: "0 1rem", 
+                  color: "#ffffff", 
+                  fontSize: "0.86rem", 
+                  outline: "none" 
                 }}
               />
-              <button
+              <button 
                 onClick={() => {
                   if (customQuery.trim()) {
                     askFoodAi(customQuery);
@@ -975,16 +1191,18 @@ MANDATORY RESPONSE GUIDELINES:
                   }
                 }}
                 disabled={aiLoading || !customQuery.trim()}
+                className="btn-tap"
                 style={{
-                  background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
-                  color: "#ffffff",
-                  border: "none",
-                  borderRadius: "14px",
-                  padding: "0 1rem",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center"
+                  background: "#ffffff", 
+                  color: "#000000", 
+                  border: "none", 
+                  borderRadius: "12px", 
+                  padding: "0 1.15rem", 
+                  cursor: (aiLoading || !customQuery.trim()) ? "not-allowed" : "pointer", 
+                  display: "flex", 
+                  alignItems: "center", 
+                  justifyContent: "center", 
+                  opacity: (aiLoading || !customQuery.trim()) ? 0.3 : 1 
                 }}
               >
                 <Send size={15} />
@@ -992,32 +1210,213 @@ MANDATORY RESPONSE GUIDELINES:
             </div>
 
             {/* Live Streaming Response Block */}
-            {aiLoading && (
-              <div style={{ padding: "1.75rem", textAlign: "center", color: "#a5b4fc", fontSize: "0.85rem", display: "flex", alignItems: "center", justifyContent: "center", gap: "0.5rem" }}>
-                <Loader2 className="animate-spin" size={17} /> Analyzing...
+            {(aiResponse || aiLoading) && (
+              <div 
+                style={{
+                  background: "#000000", 
+                  border: "1px solid rgba(255, 255, 255, 0.2)", 
+                  borderRadius: "14px", 
+                  padding: "1.1rem", 
+                  fontSize: "0.85rem", 
+                  color: "#f4f4f5", 
+                  lineHeight: 1.6, 
+                  maxHeight: "340px", 
+                  overflowY: "auto" 
+                }}
+              >
+                {aiLoading && !aiResponse ? (
+                  <div style={{ color: "#8b8b93", display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <span className="stream-dot">•</span> Analyzing nutrition & food safety...
+                  </div>
+                ) : (
+                  <div style={{ whiteSpace: "pre-line" }}>
+                    {aiResponse}
+                    {aiLoading && (
+                      <span className="stream-dot" style={{ display: "inline-block", marginLeft: "4px" }}>•</span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
+          </div>
+        </div>
+      )}
 
-            {aiResponse && (
-              <div style={{
-                background: "rgba(14, 14, 20, 0.95)",
-                border: "1px solid rgba(165, 180, 252, 0.25)",
-                borderRadius: "16px",
-                padding: "1.1rem",
-                fontSize: "0.85rem",
-                color: "#f1f5f9",
-                lineHeight: 1.6,
-                maxHeight: "320px",
-                overflowY: "auto"
-              }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", marginBottom: "0.6rem", color: "#34d399", fontWeight: 700, fontSize: "0.8rem" }}>
-                  <Sparkles size={14} /> Technical Analysis:
-                </div>
-                <div style={{ whiteSpace: "pre-line", letterSpacing: "0.01em" }}>
-                  {aiResponse}
-                </div>
+      {/* Consumer Premium Modal */}
+      {showPremiumModal && (
+        <div style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: "rgba(0, 0, 0, 0.88)",
+          backdropFilter: "blur(12px)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "1.25rem",
+          zIndex: 99999
+        }}>
+          <div style={{
+            width: "100%",
+            maxWidth: "460px",
+            background: "#0c0c0e",
+            border: "1px solid rgba(212, 175, 55, 0.35)",
+            borderRadius: "22px",
+            padding: "1.75rem",
+            position: "relative",
+            boxShadow: "0 25px 60px -15px rgba(0, 0, 0, 0.95)"
+          }}>
+            {/* Close Button */}
+            <button
+              onClick={() => setShowPremiumModal(false)}
+              className="btn-tap"
+              style={{
+                position: "absolute",
+                top: "1.25rem",
+                right: "1.25rem",
+                background: "rgba(255, 255, 255, 0.06)",
+                border: "1px solid rgba(255, 255, 255, 0.1)",
+                color: "#8b8b93",
+                width: "32px",
+                height: "32px",
+                borderRadius: "10px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center"
+              }}
+            >
+              <X size={16} />
+            </button>
+
+            {/* Header Badge */}
+            <div style={{
+              width: "44px",
+              height: "44px",
+              borderRadius: "12px",
+              background: "#18181c",
+              border: "1px solid rgba(212, 175, 55, 0.4)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              marginBottom: "1.1rem"
+            }}>
+              <Crown size={22} color="#e5c07b" />
+            </div>
+
+            <h3 style={{
+              fontSize: "1.35rem",
+              fontWeight: 800,
+              color: "#f5e6c8",
+              letterSpacing: "-0.02em",
+              margin: 0
+            }}>
+              Pantry Premium
+            </h3>
+            
+            <p style={{ fontSize: "0.84rem", color: "#8b8b93", marginTop: "0.35rem", marginBottom: "1.25rem", lineHeight: 1.45 }}>
+              Smart household grocery intelligence with continuous food safety and recipe preservation alarms.
+            </p>
+
+            {/* Current Active Plan Status */}
+            <div style={{
+              background: "#000000",
+              border: "1px solid rgba(255, 255, 255, 0.12)",
+              borderRadius: "14px",
+              padding: "0.85rem 1rem",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginBottom: "1.35rem"
+            }}>
+              <div>
+                <span style={{ fontSize: "0.7rem", color: "#71717a", textTransform: "uppercase", letterSpacing: "0.05em", display: "block" }}>
+                  Active Household Plan
+                </span>
+                <span style={{ fontSize: "0.92rem", fontWeight: 700, color: "#ffffff" }}>
+                  7-Day Free Trial
+                </span>
               </div>
-            )}
+              <span style={{
+                fontSize: "0.72rem",
+                fontWeight: 600,
+                color: "#e5c07b",
+                background: "rgba(229, 192, 123, 0.12)",
+                padding: "0.25rem 0.65rem",
+                borderRadius: "999px",
+                border: "1px solid rgba(229, 192, 123, 0.3)"
+              }}>
+                5 days remaining
+              </span>
+            </div>
+
+            {/* Features Checklist */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.8rem", marginBottom: "1.6rem" }}>
+              {[
+                { icon: Zap, label: "Unlimited optical barcode & pantry label scanning" },
+                { icon: BellRing, label: "Expiry date alarms & post-unsealing preservation alerts" },
+                { icon: Sparkles, label: "Deep clinical nutrition, allergen & harmful additive analysis" },
+                { icon: FileSpreadsheet, label: "Automated weekly grocery lists & zero-waste meal recipes" },
+                { icon: ShieldCheck, label: "Multi-device real-time household pantry synchronization" }
+              ].map((f, i) => {
+                const IconComponent = f.icon;
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                    <div style={{
+                      width: "22px",
+                      height: "22px",
+                      borderRadius: "7px",
+                      background: "rgba(229, 192, 123, 0.1)",
+                      border: "1px solid rgba(229, 192, 123, 0.2)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      flexShrink: 0
+                    }}>
+                      <IconComponent size={12} color="#e5c07b" />
+                    </div>
+                    <span style={{ fontSize: "0.84rem", color: "#d4d4d8" }}>{f.label}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Plan Price Tag */}
+            <div style={{
+              textAlign: "center",
+              marginBottom: "1.1rem"
+            }}>
+              <span style={{ fontSize: "1.55rem", fontWeight: 800, color: "#ffffff" }}>₹199</span>
+              <span style={{ fontSize: "0.82rem", color: "#71717a" }}> / month after trial</span>
+            </div>
+
+            {/* Purchase Action Button */}
+            <button
+              onClick={() => {
+                alert("Thank you for your interest. Premium household accounts are currently on free evaluation trials.");
+                setShowPremiumModal(false);
+              }}
+              className="btn-tap"
+              style={{
+                width: "100%",
+                height: "46px",
+                borderRadius: "12px",
+                border: "none",
+                background: "#ffffff",
+                color: "#000000",
+                fontSize: "0.9rem",
+                fontWeight: 700,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: "0.45rem"
+              }}
+            >
+              <Crown size={16} color="#000000" /> Activate Pantry Premium
+            </button>
           </div>
         </div>
       )}
