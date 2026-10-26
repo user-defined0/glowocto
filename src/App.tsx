@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { supabase } from "./supabase";
 import ShopkeeperDashboard from "./components/ShopkeeperDashboard";
 import ConsumerDashboard from "./components/ConsumerDashboard";
