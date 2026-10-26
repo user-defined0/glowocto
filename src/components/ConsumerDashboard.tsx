@@ -36,9 +36,9 @@ interface PantryItem {
   created_at: string;
 }
 
-// 2026 Active Production API Models
+// Active Production Gemini Models
 const MODEL_CASCADE = [
-  "gemini-3.5-flash-lite",
+  "gemini-3.5-flash",
   "gemini-3.8-flash"
 ];
 
@@ -150,18 +150,17 @@ MANDATORY RESPONSE GUIDELINES:
     for (const model of MODEL_CASCADE) {
       try {
         const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey.trim()}`,
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`,
           {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { 
+              "Content-Type": "application/json",
+              "x-goog-api-key": apiKey.trim()
+            },
             body: JSON.stringify({
               contents: [{ parts: [{ text: prompt }] }],
               generationConfig: { 
-                maxOutputTokens: 800, 
-                temperature: 0.1,
-                thinkingConfig: {
-                  thinkingBudget: 0
-                }
+                temperature: 0.7
               },
             }),
           }
@@ -309,7 +308,7 @@ MANDATORY RESPONSE GUIDELINES:
               </span>
             </div>
             <p style={{ fontSize: "0.76rem", color: "#94a3b8", marginTop: "0.2rem" }}>
-              {session.user.email}
+              {session?.user?.email}
             </p>
           </div>
 
