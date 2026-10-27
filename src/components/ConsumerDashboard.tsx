@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "../supabase";
 import { 
   ShoppingBag, 
@@ -22,8 +22,9 @@ import {
   Zap, 
   BellRing, 
   FileSpreadsheet, 
-  Check, 
-  AlertTriangle 
+  ScanLine, 
+  Camera, 
+  Calendar 
 } from "lucide-react";
 
 interface ConsumerDashboardProps {
@@ -36,6 +37,8 @@ interface PantryItem {
   name: string;
   category: string;
   quantity: string;
+  barcode?: string;
+  expiry_date?: string;
   notes?: string;
   created_at: string;
 }
@@ -56,7 +59,7 @@ const formatCleanText = (raw: string): string => {
 };
 
 export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashboardProps) {
-  const [activeTab, setActiveTab] = useState<"pantry" | "add" | "support">("pantry");
+  const [activeTab, setActiveTab] = useState<"pantry" | "scanner" | "add" | "support">("pantry");
   const [items, setItems] = useState<PantryItem[]>([]);
   const [loadingItems, setLoadingItems] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -68,7 +71,16 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
   const [itemName, setItemName] = useState("");
   const [itemCategory, setItemCategory] = useState("Daily Staples");
   const [itemQuantity, setItemQuantity] = useState("1 pack");
+  const [itemExpiry, setItemExpiry] = useState("");
+  const [itemBarcode, setItemBarcode] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Barcode Scanner State
+  const [scanBarcode, setScanBarcode] = useState("");
+  const [isScanningApi, setIsScanningApi] = useState(false);
+  const [scannerFeedback, setScannerFeedback] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [cameraActive, setCameraActive] = useState(false);
 
   // AI Modal & Engine State
   const [selectedItemForAi, setSelectedItemForAi] = useState<PantryItem | null>(null);
@@ -108,6 +120,8 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
       name: itemName.trim(),
       category: itemCategory,
       quantity: itemQuantity.trim() || "1 unit",
+      barcode: itemBarcode.trim() || null,
+      expiry_date: itemExpiry || null,
     };
 
     const { data, error } = await supabase
@@ -118,7 +132,10 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
     if (!error && data) {
       setItems(prev => [data[0] as PantryItem, ...prev]);
       setItemName("");
+      setItemCategory("Daily Staples");
       setItemQuantity("1 pack");
+      setItemExpiry("");
+      setItemBarcode("");
       setActiveTab("pantry");
     } else {
       alert("Failed to save item. Make sure the database migration was run.");
@@ -133,6 +150,79 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
       setItems(prev => prev.filter(i => i.id !== id));
       if (selectedItemForAi?.id === id) setSelectedItemForAi(null);
     }
+  };
+
+  // Barcode Scanner & Lookup Logic
+  const lookupBarcode = async (code: string) => {
+    if (!code.trim()) return;
+    setIsScanningApi(true);
+    setScannerFeedback(null);
+
+    try {
+      const response = await fetch(`https://in.openfoodfacts.org/api/v0/product/${code.trim()}.json`);
+      const data = await response.json();
+
+      if (data && data.status === 1 && data.product) {
+        const foundName = data.product.product_name || data.product.generic_name || "Grocery Item";
+        setItemName(foundName);
+        setItemBarcode(code.trim());
+        setScannerFeedback(`Found: ${foundName}. Check quantity and expiry date below.`);
+        setActiveTab("add");
+      } else {
+        setScannerFeedback("Barcode not recognized in database. Add details manually.");
+        setItemBarcode(code.trim());
+        setActiveTab("add");
+      }
+    } catch {
+      setScannerFeedback("Network error looking up barcode. Please enter details manually.");
+      setItemBarcode(code.trim());
+      setActiveTab("add");
+    } finally {
+      setIsScanningApi(false);
+      stopCamera();
+    }
+  };
+
+  const startCamera = async () => {
+    setCameraActive(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment" }
+      });
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        videoRef.current.play();
+
+        if ("BarcodeDetector" in window) {
+          const detector = new (window as any).BarcodeDetector({
+            formats: ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"]
+          });
+
+          const interval = setInterval(async () => {
+            if (videoRef.current && videoRef.current.readyState === 4) {
+              try {
+                const barcodes = await detector.detect(videoRef.current);
+                if (barcodes.length > 0) {
+                  clearInterval(interval);
+                  lookupBarcode(barcodes[0].rawValue);
+                }
+              } catch {}
+            }
+          }, 400);
+        }
+      }
+    } catch {
+      setScannerFeedback("Camera access was denied. Enter code manually.");
+      setCameraActive(false);
+    }
+  };
+
+  const stopCamera = () => {
+    if (videoRef.current && videoRef.current.srcObject) {
+      const stream = videoRef.current.srcObject as MediaStream;
+      stream.getTracks().forEach(track => track.stop());
+    }
+    setCameraActive(false);
   };
 
   const askFoodAi = async (question: string) => {
@@ -277,7 +367,8 @@ Instructions:
     const q = searchQuery.toLowerCase();
     return items.filter(i => 
       i.name.toLowerCase().includes(q) ||
-      i.category.toLowerCase().includes(q)
+      i.category.toLowerCase().includes(q) ||
+      (i.barcode && i.barcode.includes(q))
     );
   }, [items, searchQuery]);
 
@@ -575,16 +666,17 @@ Instructions:
         {/* Tab Switcher */}
         <div style={{
           display: "grid",
-          gridTemplateColumns: "1fr 1fr 1fr",
+          gridTemplateColumns: "1fr 1fr 1fr 1fr",
           background: "#09090b", 
           border: "1px solid rgba(255, 255, 255, 0.1)", 
           padding: "4px", 
           borderRadius: "16px" 
         }}>
           {[
-            { id: "pantry", label: `My Pantry (${items.length})`, icon: ShoppingBag },
+            { id: "pantry", label: `Pantry (${items.length})`, icon: ShoppingBag },
+            { id: "scanner", label: "Scan Code", icon: ScanLine },
             { id: "add", label: "Add Food", icon: PlusCircle },
-            { id: "support", label: "Help Desk", icon: LifeBuoy }
+            { id: "support", label: "Support", icon: LifeBuoy }
           ].map(tab => {
             const Icon = tab.icon;
             const isSelected = activeTab === tab.id;
@@ -599,13 +691,13 @@ Instructions:
                   border: "none",
                   borderRadius: "12px",
                   padding: "0.65rem 0.2rem",
-                  fontSize: "0.82rem",
+                  fontSize: "0.8rem",
                   fontWeight: isSelected ? 700 : 500,
                   cursor: "pointer",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  gap: "0.4rem"
+                  gap: "0.35rem"
                 }}
               >
                 <Icon size={14} color={isSelected ? "#000000" : "#8b8b93"} />
@@ -622,7 +714,7 @@ Instructions:
               <Search size={16} color="#71717a" style={{ position: "absolute", left: "14px", top: "14px" }} />
               <input 
                 type="text" 
-                placeholder="Search food items or categories..." 
+                placeholder="Search food items, categories, or barcode..." 
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 style={{
@@ -657,25 +749,46 @@ Instructions:
                 <p style={{ fontSize: "0.82rem", color: "#8b8b93", maxWidth: "320px", margin: "0.4rem auto 1.25rem" }}>
                   Log items you brought home to run instant clinical nutrition and shelf safety reviews.
                 </p>
-                <button
-                  onClick={() => setActiveTab("add")}
-                  className="btn-tap"
-                  style={{
-                    background: "#ffffff",
-                    color: "#000000",
-                    border: "none",
-                    borderRadius: "12px",
-                    padding: "0.6rem 1.2rem",
-                    fontSize: "0.85rem",
-                    fontWeight: 700,
-                    cursor: "pointer",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    gap: "0.4rem"
-                  }}
-                >
-                  <PlusCircle size={15} /> Add First Food Item
-                </button>
+                <div style={{ display: "flex", justifyContent: "center", gap: "0.6rem" }}>
+                  <button
+                    onClick={() => setActiveTab("scanner")}
+                    className="btn-tap"
+                    style={{
+                      background: "rgba(255, 255, 255, 0.08)",
+                      color: "#ffffff",
+                      border: "1px solid rgba(255, 255, 255, 0.2)",
+                      borderRadius: "12px",
+                      padding: "0.6rem 1.1rem",
+                      fontSize: "0.84rem",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "0.4rem"
+                    }}
+                  >
+                    <ScanLine size={15} /> Scan Barcode
+                  </button>
+                  <button
+                    onClick={() => setActiveTab("add")}
+                    className="btn-tap"
+                    style={{
+                      background: "#ffffff",
+                      color: "#000000",
+                      border: "none",
+                      borderRadius: "12px",
+                      padding: "0.6rem 1.1rem",
+                      fontSize: "0.84rem",
+                      fontWeight: 700,
+                      cursor: "pointer",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "0.4rem"
+                    }}
+                  >
+                    <PlusCircle size={15} /> Add Manually
+                  </button>
+                </div>
               </div>
             ) : (
               <div className="pantry-card-grid">
@@ -713,7 +826,7 @@ Instructions:
                             </span>
                           </div>
 
-                          <div style={{ marginTop: "0.4rem" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "0.65rem", marginTop: "0.45rem", flexWrap: "wrap" }}>
                             <span style={{
                               fontSize: "0.72rem",
                               fontWeight: 600,
@@ -725,6 +838,24 @@ Instructions:
                             }}>
                               {item.category}
                             </span>
+
+                            {item.expiry_date && (
+                              <span style={{ 
+                                display: "inline-flex", 
+                                alignItems: "center", 
+                                gap: "0.25rem", 
+                                fontSize: "0.74rem", 
+                                color: "#8b8b93" 
+                              }}>
+                                <Calendar size={12} /> Exp: {item.expiry_date}
+                              </span>
+                            )}
+
+                            {item.barcode && (
+                              <span style={{ fontSize: "0.72rem", color: "#71717a" }}>
+                                #{item.barcode}
+                              </span>
+                            )}
                           </div>
                         </div>
 
@@ -789,7 +920,134 @@ Instructions:
           </div>
         )}
 
-        {/* TAB 2: ADD TO PANTRY */}
+        {/* TAB 2: BARCODE SCANNER */}
+        {activeTab === "scanner" && (
+          <div style={{ 
+            background: "#09090b", 
+            border: "1px solid rgba(255, 255, 255, 0.1)", 
+            borderRadius: "18px", 
+            padding: "1.5rem", 
+            display: "flex", 
+            flexDirection: "column", 
+            gap: "1.25rem" 
+          }}>
+            <div>
+              <h3 style={{ fontSize: "1.1rem", fontWeight: 700, color: "#ffffff", margin: 0 }}>Scan Food Barcode</h3>
+              <p style={{ fontSize: "0.82rem", color: "#8b8b93", marginTop: "0.25rem" }}>
+                Scan packaged food using your camera or enter the barcode number to auto-fetch details.
+              </p>
+            </div>
+
+            <div style={{ 
+              width: "100%", 
+              height: cameraActive ? "260px" : "auto", 
+              background: "#000000", 
+              border: "1px dashed rgba(255, 255, 255, 0.2)", 
+              borderRadius: "14px", 
+              display: "flex", 
+              flexDirection: "column", 
+              alignItems: "center", 
+              justifyContent: "center", 
+              overflow: "hidden", 
+              position: "relative" 
+            }}>
+              {cameraActive ? (
+                <>
+                  <video ref={videoRef} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  <button 
+                    onClick={stopCamera} 
+                    className="btn-tap"
+                    style={{ 
+                      position: "absolute", 
+                      bottom: "12px", 
+                      background: "#ffffff", 
+                      color: "#000000", 
+                      border: "none", 
+                      padding: "0.45rem 1rem", 
+                      borderRadius: "10px", 
+                      fontSize: "0.8rem", 
+                      fontWeight: 700, 
+                      cursor: "pointer" 
+                    }}
+                  >
+                    Close camera
+                  </button>
+                </>
+              ) : (
+                <button 
+                  onClick={startCamera} 
+                  className="btn-tap"
+                  style={{ 
+                    background: "transparent", 
+                    color: "#ffffff", 
+                    border: "none", 
+                    padding: "2.5rem 1.5rem", 
+                    display: "flex", 
+                    flexDirection: "column", 
+                    alignItems: "center", 
+                    gap: "0.6rem", 
+                    cursor: "pointer" 
+                  }}
+                >
+                  <Camera size={28} color="#8b8b93" />
+                  <span style={{ fontSize: "0.86rem", fontWeight: 600 }}>Open camera to scan</span>
+                </button>
+              )}
+            </div>
+
+            <div style={{ display: "flex", gap: "0.55rem" }}>
+              <input 
+                type="text" 
+                placeholder="Enter barcode number..." 
+                value={scanBarcode}
+                onChange={e => setScanBarcode(e.target.value)}
+                style={{
+                  flex: 1,
+                  height: "44px",
+                  background: "#000000", 
+                  border: "1px solid rgba(255, 255, 255, 0.14)", 
+                  borderRadius: "12px", 
+                  color: "#ffffff", 
+                  padding: "0 0.95rem", 
+                  fontSize: "0.86rem", 
+                  outline: "none" 
+                }}
+              />
+              <button 
+                onClick={() => lookupBarcode(scanBarcode)}
+                disabled={isScanningApi}
+                className="btn-tap"
+                style={{ 
+                  background: "#ffffff", 
+                  color: "#000000", 
+                  border: "none", 
+                  padding: "0 1.25rem", 
+                  borderRadius: "12px", 
+                  fontSize: "0.86rem", 
+                  fontWeight: 700, 
+                  cursor: "pointer" 
+                }}
+              >
+                {isScanningApi ? "Searching..." : "Search"}
+              </button>
+            </div>
+
+            {scannerFeedback && (
+              <div style={{ 
+                fontSize: "0.84rem", 
+                padding: "0.85rem", 
+                borderRadius: "12px", 
+                background: "#000000", 
+                border: "1px solid rgba(255, 255, 255, 0.2)", 
+                color: "#ffffff" 
+              }}>
+                {scannerFeedback}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 3: ADD TO PANTRY */}
         {activeTab === "add" && (
           <div style={{
             background: "#09090b",
@@ -907,6 +1165,53 @@ Instructions:
                 />
               </div>
 
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+                <div>
+                  <label style={{ fontSize: "0.74rem", color: "#8b8b93", display: "block", marginBottom: "0.3rem" }}>
+                    Expiry Date (optional)
+                  </label>
+                  <input 
+                    type="date"
+                    value={itemExpiry}
+                    onChange={e => setItemExpiry(e.target.value)}
+                    style={{
+                      width: "100%",
+                      height: "44px",
+                      background: "#000000",
+                      border: "1px solid rgba(255, 255, 255, 0.14)",
+                      borderRadius: "12px",
+                      color: "#ffffff",
+                      padding: "0 0.95rem",
+                      fontSize: "0.85rem",
+                      outline: "none"
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ fontSize: "0.74rem", color: "#8b8b93", display: "block", marginBottom: "0.3rem" }}>
+                    Barcode (optional)
+                  </label>
+                  <input 
+                    type="text"
+                    placeholder="e.g. 890123302"
+                    value={itemBarcode}
+                    onChange={e => setItemBarcode(e.target.value)}
+                    style={{
+                      width: "100%",
+                      height: "44px",
+                      background: "#000000",
+                      border: "1px solid rgba(255, 255, 255, 0.14)",
+                      borderRadius: "12px",
+                      color: "#ffffff",
+                      padding: "0 0.95rem",
+                      fontSize: "0.85rem",
+                      outline: "none"
+                    }}
+                  />
+                </div>
+              </div>
+
               <button 
                 type="submit" 
                 disabled={isSubmitting} 
@@ -929,7 +1234,7 @@ Instructions:
           </div>
         )}
 
-        {/* TAB 3: HELP & SUPPORT */}
+        {/* TAB 4: HELP & SUPPORT */}
         {activeTab === "support" && (
           <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
             <div style={{
@@ -1062,7 +1367,7 @@ Instructions:
 
       </div>
 
-      {/* Food Intelligence Assistant Modal (Matching Shopkeeper's Robust Engine) */}
+      {/* Food Intelligence Assistant Modal */}
       {selectedItemForAi && (
         <div className="assistant-modal-wrapper">
           <div className="assistant-modal-box">
