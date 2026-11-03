@@ -67,7 +67,7 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
   const [loadingItems, setLoadingItems] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Notification Permission State
+  // Notification State
   const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
     typeof window !== "undefined" && "Notification" in window ? Notification.permission : "default"
   );
@@ -84,7 +84,7 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
   const [itemBarcode, setItemBarcode] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Barcode Scanner State with Persistent Hardware Stream Reference
+  // Barcode Scanner State
   const [scanBarcode, setScanBarcode] = useState("");
   const [isScanningApi, setIsScanningApi] = useState(false);
   const [scannerFeedback, setScannerFeedback] = useState<string | null>(null);
@@ -106,7 +106,7 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
     }
   }, [session]);
 
-  // Clean up camera hardware when switching tabs or unmounting
+  // Clean up camera hardware when leaving scanner or unmounting
   useEffect(() => {
     if (activeTab !== "scanner") {
       stopCamera();
@@ -135,10 +135,10 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
     setLoadingItems(false);
   };
 
-  // Notification Handling
+  // Explicit user-driven notification request
   const requestNotificationAccess = async () => {
     if (!("Notification" in window)) {
-      alert("This browser does not support desktop notifications.");
+      alert("This browser does not support push notifications.");
       return;
     }
     try {
@@ -178,13 +178,13 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
 
     if (expiringSoon.length > 0) {
       new Notification("QuickPick Expiry Reminder", {
-        body: `⚠️ ${expiringSoon.length} item(s) in your pantry expire within 5 days (${expiringSoon.map(i => i.name).slice(0, 3).join(", ")}).`,
+        body: `⚠️ ${expiringSoon.length} pantry item(s) expire within 5 days (${expiringSoon.map(i => i.name).slice(0, 3).join(", ")}).`,
         icon: "/favicon.ico"
       });
       notificationFiredRef.current = true;
     } else if (alreadyExpired.length > 0) {
       new Notification("QuickPick Expired Food Alert", {
-        body: `🚨 ${alreadyExpired.length} item(s) have passed their expiration date (${alreadyExpired.map(i => i.name).slice(0, 3).join(", ")}).`,
+        body: `🚨 ${alreadyExpired.length} pantry item(s) have passed their expiration date (${alreadyExpired.map(i => i.name).slice(0, 3).join(", ")}).`,
         icon: "/favicon.ico"
       });
       notificationFiredRef.current = true;
@@ -235,7 +235,6 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
     }
   };
 
-  // Barcode Scanner & Lookup Logic
   const lookupBarcode = async (code: string) => {
     if (!code.trim()) return;
     setIsScanningApi(true);
@@ -468,7 +467,6 @@ Instructions:
     return stats;
   }, [items]);
 
-  // Expiry calculation for badges and alert banner
   const { expiringSoonItems, expiredItems } = useMemo(() => {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -536,7 +534,6 @@ Instructions:
           animation: pulseDot 1s infinite ease-in-out;
         }
 
-        /* Default layout: Mobile clean container */
         .dash-shell {
           width: 100%;
           max-width: 800px;
@@ -581,7 +578,6 @@ Instructions:
           overflow-y: auto;
         }
 
-        /* Desktop Enhancement: Fully utilizes widescreen space */
         @media (min-width: 820px) {
           .dash-shell {
             max-width: 1120px !important;
@@ -633,6 +629,7 @@ Instructions:
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            {/* Notification button placed beside Log out */}
             <button
               onClick={requestNotificationAccess}
               className="btn-tap"
@@ -770,7 +767,7 @@ Instructions:
           </div>
         </div>
 
-        {/* Expiry Reminder Banner */}
+        {/* Expiry Alert Banner */}
         {(expiringSoonItems.length > 0 || expiredItems.length > 0) && (
           <div style={{ 
             background: "#0c0a09", 

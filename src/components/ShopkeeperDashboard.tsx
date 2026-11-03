@@ -167,12 +167,18 @@ export default function ShopkeeperDashboard({ session, onSignOut }: ShopkeeperDa
     if (data) setSales(data as SaleRecord[]);
   };
 
-  // --- Notification Feature: Permission Request & Dispatch ---
+  // Notification Feature: Explicit User-Driven Request
   const requestNotificationAccess = async () => {
     if (!("Notification" in window)) {
-      alert("This browser does not support desktop notifications.");
+      alert("This browser does not support desktop or web notifications.");
       return;
     }
+
+    if (Notification.permission === "denied") {
+      alert("Notifications are currently blocked by your browser. Tap the tune/padlock icon on the left side of the address bar to switch Notifications to 'Allow'.");
+      return;
+    }
+
     try {
       const permission = await Notification.requestPermission();
       setNotificationPermission(permission);
@@ -757,6 +763,7 @@ export default function ShopkeeperDashboard({ session, onSignOut }: ShopkeeperDa
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            {/* Notification Button beside Log out */}
             <button
               onClick={requestNotificationAccess}
               className="btn-tap"
