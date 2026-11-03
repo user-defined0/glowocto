@@ -21,6 +21,9 @@ import {
   Crown, 
   Zap, 
   BellRing, 
+  Bell, 
+  BellOff, 
+  Clock, 
   FileSpreadsheet, 
   ScanLine, 
   Camera, 
@@ -64,6 +67,12 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
   const [loadingItems, setLoadingItems] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
+  // Notification Permission State
+  const [notificationPermission, setNotificationPermission] = useState<NotificationPermission>(
+    typeof window !== "undefined" && "Notification" in window ? Notification.permission : "default"
+  );
+  const notificationFiredRef = useRef(false);
+
   // Premium Modal State
   const [showPremiumModal, setShowPremiumModal] = useState(false);
 
@@ -75,11 +84,12 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
   const [itemBarcode, setItemBarcode] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Barcode Scanner State
+  // Barcode Scanner State with Persistent Hardware Stream Reference
   const [scanBarcode, setScanBarcode] = useState("");
   const [isScanningApi, setIsScanningApi] = useState(false);
   const [scannerFeedback, setScannerFeedback] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const [cameraActive, setCameraActive] = useState(false);
 
   // AI Modal & Engine State
@@ -96,6 +106,19 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
     }
   }, [session]);
 
+  // Clean up camera hardware when switching tabs or unmounting
+  useEffect(() => {
+    if (activeTab !== "scanner") {
+      stopCamera();
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    return () => {
+      stopCamera();
+    };
+  }, []);
+
   const fetchPantryItems = async (userId: string) => {
     setLoadingItems(true);
     const { data, error } = await supabase
@@ -105,9 +128,67 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
       .order("created_at", { ascending: false });
 
     if (!error && data) {
-      setItems(data as PantryItem[]);
+      const pantryData = data as PantryItem[];
+      setItems(pantryData);
+      triggerExpiryNotification(pantryData);
     }
     setLoadingItems(false);
+  };
+
+  // Notification Handling
+  const requestNotificationAccess = async () => {
+    if (!("Notification" in window)) {
+      alert("This browser does not support desktop notifications.");
+      return;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+      if (permission === "granted") {
+        notificationFiredRef.current = false;
+        triggerExpiryNotification(items);
+      }
+    } catch (err) {
+      console.error("Error requesting notification permission:", err);
+    }
+  };
+
+  const triggerExpiryNotification = (pantryList: PantryItem[]) => {
+    if (!("Notification" in window) || Notification.permission !== "granted" || notificationFiredRef.current) {
+      return;
+    }
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const expiringSoon = pantryList.filter(item => {
+      if (!item.expiry_date) return false;
+      const exp = new Date(item.expiry_date);
+      exp.setHours(0, 0, 0, 0);
+      const diffDays = Math.ceil((exp.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      return diffDays >= 0 && diffDays <= 5;
+    });
+
+    const alreadyExpired = pantryList.filter(item => {
+      if (!item.expiry_date) return false;
+      const exp = new Date(item.expiry_date);
+      exp.setHours(0, 0, 0, 0);
+      return exp.getTime() < today.getTime();
+    });
+
+    if (expiringSoon.length > 0) {
+      new Notification("QuickPick Expiry Reminder", {
+        body: `⚠️ ${expiringSoon.length} item(s) in your pantry expire within 5 days (${expiringSoon.map(i => i.name).slice(0, 3).join(", ")}).`,
+        icon: "/favicon.ico"
+      });
+      notificationFiredRef.current = true;
+    } else if (alreadyExpired.length > 0) {
+      new Notification("QuickPick Expired Food Alert", {
+        body: `🚨 ${alreadyExpired.length} item(s) have passed their expiration date (${alreadyExpired.map(i => i.name).slice(0, 3).join(", ")}).`,
+        icon: "/favicon.ico"
+      });
+      notificationFiredRef.current = true;
+    }
   };
 
   const handleAddItem = async (e?: React.FormEvent) => {
@@ -130,13 +211,15 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
       .select();
 
     if (!error && data) {
-      setItems(prev => [data[0] as PantryItem, ...prev]);
+      const updatedList = [data[0] as PantryItem, ...items];
+      setItems(updatedList);
       setItemName("");
       setItemCategory("Daily Staples");
       setItemQuantity("1 pack");
       setItemExpiry("");
       setItemBarcode("");
       setActiveTab("pantry");
+      triggerExpiryNotification(updatedList);
     } else {
       alert("Failed to save item. Make sure the database migration was run.");
     }
@@ -189,6 +272,8 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment" }
       });
+      streamRef.current = stream;
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.play();
@@ -218,9 +303,12 @@ export default function ConsumerDashboard({ session, onSignOut }: ConsumerDashbo
   };
 
   const stopCamera = () => {
-    if (videoRef.current && videoRef.current.srcObject) {
-      const stream = videoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach(track => track.stop());
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
     }
     setCameraActive(false);
   };
@@ -380,6 +468,29 @@ Instructions:
     return stats;
   }, [items]);
 
+  // Expiry calculation for badges and alert banner
+  const { expiringSoonItems, expiredItems } = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const expiringSoon: PantryItem[] = [];
+    const expired: PantryItem[] = [];
+
+    items.forEach(item => {
+      if (!item.expiry_date) return;
+      const exp = new Date(item.expiry_date);
+      exp.setHours(0, 0, 0, 0);
+      const diffDays = Math.ceil((exp.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+      if (diffDays < 0) {
+        expired.push(item);
+      } else if (diffDays <= 5) {
+        expiringSoon.push(item);
+      }
+    });
+
+    return { expiringSoonItems: expiringSoon, expiredItems: expired };
+  }, [items]);
+
   const getCategoryColor = (cat: string) => {
     switch (cat) {
       case "Dairy & Milk":
@@ -521,25 +632,60 @@ Instructions:
             </p>
           </div>
 
-          <button 
-            onClick={onSignOut} 
-            className="btn-tap"
-            style={{ 
-              background: "#000000", 
-              color: "#ffffff", 
-              border: "1px solid rgba(255, 255, 255, 0.2)", 
-              padding: "0.45rem 0.85rem", 
-              borderRadius: "12px", 
-              cursor: "pointer", 
-              display: "flex", 
-              alignItems: "center", 
-              gap: "0.4rem", 
-              fontSize: "0.8rem",
-              fontWeight: 500
-            }}
-          >
-            <LogOut size={14} /> Log out
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+            <button
+              onClick={requestNotificationAccess}
+              className="btn-tap"
+              title={notificationPermission === "granted" ? "Notifications enabled" : "Enable expiry notifications"}
+              style={{
+                background: notificationPermission === "granted" ? "rgba(34, 197, 94, 0.12)" : "#000000",
+                color: notificationPermission === "granted" ? "#4ade80" : "#8b8b93",
+                border: notificationPermission === "granted" ? "1px solid rgba(34, 197, 94, 0.35)" : "1px solid rgba(255, 255, 255, 0.2)",
+                padding: "0.45rem 0.75rem",
+                borderRadius: "12px",
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: "0.35rem",
+                fontSize: "0.78rem",
+                fontWeight: 600
+              }}
+            >
+              {notificationPermission === "granted" ? (
+                <>
+                  <Bell size={13} color="#4ade80" /> Alerts On
+                </>
+              ) : notificationPermission === "denied" ? (
+                <>
+                  <BellOff size={13} color="#f87171" /> Blocked
+                </>
+              ) : (
+                <>
+                  <BellRing size={13} color="#ffffff" /> Enable Alerts
+                </>
+              )}
+            </button>
+
+            <button 
+              onClick={onSignOut} 
+              className="btn-tap"
+              style={{ 
+                background: "#000000", 
+                color: "#ffffff", 
+                border: "1px solid rgba(255, 255, 255, 0.2)", 
+                padding: "0.45rem 0.85rem", 
+                borderRadius: "12px", 
+                cursor: "pointer", 
+                display: "flex", 
+                alignItems: "center", 
+                gap: "0.4rem", 
+                fontSize: "0.8rem",
+                fontWeight: 500
+              }}
+            >
+              <LogOut size={14} /> Log out
+            </button>
+          </div>
         </header>
 
         {/* Consumer Premium Banner */}
@@ -624,6 +770,57 @@ Instructions:
           </div>
         </div>
 
+        {/* Expiry Reminder Banner */}
+        {(expiringSoonItems.length > 0 || expiredItems.length > 0) && (
+          <div style={{ 
+            background: "#0c0a09", 
+            border: "1px solid rgba(245, 158, 11, 0.4)", 
+            borderRadius: "16px", 
+            padding: "0.85rem 1.15rem", 
+            display: "flex", 
+            alignItems: "center", 
+            justifyContent: "space-between",
+            gap: "0.75rem", 
+            color: "#ffffff" 
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+              <Clock size={18} color="#fbbf24" style={{ flexShrink: 0 }} />
+              <div style={{ fontSize: "0.82rem", lineHeight: 1.4 }}>
+                {expiredItems.length > 0 && (
+                  <span style={{ color: "#f87171", fontWeight: 700, display: "block" }}>
+                    {expiredItems.length} item(s) already expired: {expiredItems.map(i => i.name).slice(0, 2).join(", ")}
+                  </span>
+                )}
+                {expiringSoonItems.length > 0 && (
+                  <span style={{ color: "#fbbf24" }}>
+                    <strong>Expiry Alert:</strong> {expiringSoonItems.length} item(s) expire within 5 days ({expiringSoonItems.map(i => i.name).slice(0, 3).join(", ")}).
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {notificationPermission !== "granted" && (
+              <button
+                onClick={requestNotificationAccess}
+                className="btn-tap"
+                style={{
+                  background: "#ffffff",
+                  color: "#000000",
+                  border: "none",
+                  borderRadius: "10px",
+                  padding: "0.4rem 0.8rem",
+                  fontSize: "0.74rem",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap"
+                }}
+              >
+                Turn On Push
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Quick Numbers Bar */}
         <div className="stats-grid">
           <div style={{ 
@@ -644,9 +841,9 @@ Instructions:
             borderRadius: "16px", 
             padding: "0.85rem 1rem" 
           }}>
-            <span style={{ fontSize: "0.75rem", color: "#8b8b93" }}>Categories</span>
+            <span style={{ fontSize: "0.75rem", color: "#8b8b93" }}>Expiring / Expired</span>
             <p style={{ fontSize: "1.25rem", fontWeight: 700, marginTop: "0.25rem", color: "#ffffff" }}>
-              {Object.keys(categoryStats).length}
+              {expiringSoonItems.length + expiredItems.length}
             </p>
           </div>
 
@@ -794,6 +991,19 @@ Instructions:
               <div className="pantry-card-grid">
                 {filteredItems.map(item => {
                   const catTheme = getCategoryColor(item.category);
+
+                  let isExpired = false;
+                  let isExpiringSoon = false;
+                  if (item.expiry_date) {
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    const exp = new Date(item.expiry_date);
+                    exp.setHours(0, 0, 0, 0);
+                    const diffDays = Math.ceil((exp.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                    if (diffDays < 0) isExpired = true;
+                    else if (diffDays <= 5) isExpiringSoon = true;
+                  }
+
                   return (
                     <div 
                       key={item.id} 
@@ -824,6 +1034,32 @@ Instructions:
                             }}>
                               {item.quantity}
                             </span>
+
+                            {isExpired ? (
+                              <span style={{
+                                fontSize: "0.7rem",
+                                fontWeight: 700,
+                                padding: "0.15rem 0.5rem",
+                                borderRadius: "999px",
+                                background: "rgba(239, 68, 68, 0.2)",
+                                border: "1px solid rgba(239, 68, 68, 0.5)",
+                                color: "#fca5a5"
+                              }}>
+                                Expired
+                              </span>
+                            ) : isExpiringSoon ? (
+                              <span style={{
+                                fontSize: "0.7rem",
+                                fontWeight: 700,
+                                padding: "0.15rem 0.5rem",
+                                borderRadius: "999px",
+                                background: "rgba(245, 158, 11, 0.18)",
+                                border: "1px solid rgba(245, 158, 11, 0.45)",
+                                color: "#fde047"
+                              }}>
+                                Expiring soon
+                              </span>
+                            ) : null}
                           </div>
 
                           <div style={{ display: "flex", alignItems: "center", gap: "0.65rem", marginTop: "0.45rem", flexWrap: "wrap" }}>
@@ -845,7 +1081,7 @@ Instructions:
                                 alignItems: "center", 
                                 gap: "0.25rem", 
                                 fontSize: "0.74rem", 
-                                color: "#8b8b93" 
+                                color: isExpired ? "#f87171" : isExpiringSoon ? "#fbbf24" : "#8b8b93" 
                               }}>
                                 <Calendar size={12} /> Exp: {item.expiry_date}
                               </span>
@@ -1371,7 +1607,6 @@ Instructions:
       {selectedItemForAi && (
         <div className="assistant-modal-wrapper">
           <div className="assistant-modal-box">
-            {/* Modal Header */}
             <div style={{ 
               display: "flex", 
               justifyContent: "space-between", 
@@ -1407,7 +1642,6 @@ Instructions:
               </button>
             </div>
 
-            {/* Quick Action Chips */}
             <div>
               <span style={{ fontSize: "0.75rem", color: "#8b8b93", display: "block", marginBottom: "0.5rem" }}>
                 Select an inquiry:
@@ -1463,7 +1697,6 @@ Instructions:
               </div>
             </div>
 
-            {/* Custom Input */}
             <div style={{ display: "flex", gap: "0.55rem" }}>
               <input 
                 type="text" 
@@ -1514,7 +1747,6 @@ Instructions:
               </button>
             </div>
 
-            {/* Live Streaming Response Block */}
             {(aiResponse || aiLoading) && (
               <div 
                 style={{
@@ -1573,7 +1805,6 @@ Instructions:
             position: "relative",
             boxShadow: "0 25px 60px -15px rgba(0, 0, 0, 0.95)"
           }}>
-            {/* Close Button */}
             <button
               onClick={() => setShowPremiumModal(false)}
               className="btn-tap"
@@ -1596,7 +1827,6 @@ Instructions:
               <X size={16} />
             </button>
 
-            {/* Header Badge */}
             <div style={{
               width: "44px",
               height: "44px",
@@ -1625,7 +1855,6 @@ Instructions:
               Smart household grocery intelligence with continuous food safety and recipe preservation alarms.
             </p>
 
-            {/* Current Active Plan Status */}
             <div style={{
               background: "#000000",
               border: "1px solid rgba(255, 255, 255, 0.12)",
@@ -1657,7 +1886,6 @@ Instructions:
               </span>
             </div>
 
-            {/* Features Checklist */}
             <div style={{ display: "flex", flexDirection: "column", gap: "0.8rem", marginBottom: "1.6rem" }}>
               {[
                 { icon: Zap, label: "Unlimited optical barcode & pantry label scanning" },
@@ -1688,16 +1916,11 @@ Instructions:
               })}
             </div>
 
-            {/* Plan Price Tag */}
-            <div style={{
-              textAlign: "center",
-              marginBottom: "1.1rem"
-            }}>
+            <div style={{ textAlign: "center", marginBottom: "1.1rem" }}>
               <span style={{ fontSize: "1.55rem", fontWeight: 800, color: "#ffffff" }}>₹199</span>
               <span style={{ fontSize: "0.82rem", color: "#71717a" }}> / month after trial</span>
             </div>
 
-            {/* Purchase Action Button */}
             <button
               onClick={() => {
                 alert("Thank you for your interest. Premium household accounts are currently on free evaluation trials.");
